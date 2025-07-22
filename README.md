@@ -38,7 +38,6 @@ These notebooks provide additional figure generation and analysis.
 
 - R and RStudio (for `.Rmd` files)
 - Python and Jupyter Notebook (for `.ipynb` files)
-- Required R and Python packages as specified in the scripts/notebooks
 
 ## Contact
 
