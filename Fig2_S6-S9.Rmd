@@ -1,0 +1,1384 @@
+# 1.Pre-processing
+
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(tidyverse)
+  library(ggsci)
+})
+
+out_dir = "../02.figures/Fig2"
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir)
+}
+```
+
+
+## 1.1 Integrated male samples
+```{r}
+seob_list <- list()
+samples <- c('18dpi_M','22dpi_M','26dpi_M')
+DIR='/public/shycheng/'
+
+for (sample in samples) {
+  #loading data
+  scrna_data <- Read10X(
+    data.dir = paste0(DIR,paste0(sample,'-out'),'/outs/filtered_feature_bc_matrix'))
+  # create seurat object
+  seob <- CreateSeuratObject(
+    counts = scrna_data,
+    project = sample,
+    min.cells = 3, 
+    min.features = 200)
+  
+  # add metadata
+  seob[['sample']] <- sample
+  
+  # save seobs in list
+  seob_list[[sample]] = seob
+}
+
+seob <- merge(x = seob_list[[1]],
+              y = seob_list[-1],
+              add.cell.ids = names(seob_list))
+
+
+seob[["percent.mt"]] <- PercentageFeatureSet(
+  seob, 
+  pattern = "^ND|^C|^ATP"
+)
+
+seob@meta.data <- seob@meta.data %>% 
+  mutate(Time = case_when(
+    sample == grepl('18dpi',sample) ~ '18dpi',
+    grepl('22dpi',sample) ~ '22dpi',
+    grepl('26dpi',sample) ~ '26dpi'
+  ))
+
+# filter cells
+seob <- subset(seob,subset = nFeature_RNA > 500 &percent.mt < 30)
+# split object
+seob_list <- SplitObject(seob, split.by = "sample")
+
+
+
+# 2.prepare Data ----------------------------------------------------------
+
+
+# 1. SCTransform
+for(i in 1:length(seob_list)){
+  seob_list[[i]] <- SCTransform(
+    seob_list[[i]], 
+    variable.features.n = 3000,
+    verbose = FALSE)}
+# 2. Integration
+features <- SelectIntegrationFeatures(object.list = seob_list,
+                                      nfeatures = 3000)
+## PrepSCTIntegration
+seob_list <- PrepSCTIntegration(object.list = seob_list, 
+                                anchor.features = features)
+## find anchors
+seob.anchors <- FindIntegrationAnchors(object.list = seob_list, 
+                                       normalization.method = "SCT",
+                                       anchor.features = features)
+## this command creates an 'integrated' data assay
+Male_seob <- IntegrateData(anchorset = seob.anchors, normalization.method = "SCT",verbose = F)
+
+
+
+# 3.reduce dim ----------------------------------------------------------
+
+## PCA
+Male_seob <- RunPCA(Male_seob,npcs = 50)
+## t-SNE
+Male_seob <- RunTSNE(Male_seob, dims = 1:50)
+## UMAP
+Male_seob <- RunUMAP(Male_seob, dims = 1:50)
+Male_seob <- FindNeighbors(Male_seob,dims = 1:50)
+Male_seob <- FindClusters(Male_seob,resolution = 1,random.seed = 1)
+Male_seob@meta.data$integrated_snn_res.1 <- as.character(Male_seob@meta.data$integrated_snn_res.1)
+Male_seob@meta.data[WhichCells(Male_seob,idents = 16,expression = `Sjc-0002936` <= 0),]$integrated_snn_res.1 <- 44
+Male_seob@meta.data$seurat_clusters <- Male_seob@meta.data$integrated_snn_res.1
+
+#saveRDS(Male_seob,file = '/home/R/Projects/scRNA-seq/Results_SingleCell_Sja2021/0.data/Male_seob_CellType.rds')
+
+Male_seob <- readRDS(file = '/home/shycheng/Projects/scRNA-seq/Results_SingleCell_Sja2021/0.data/Male_seob_CellType.rds')
+
+
+
+# 4. Cell annotation ------------------------------------------------------
+
+### CellMarkers -- known
+# Neoblast : Sjc-0000924,Sjc-0005962,Sjc-0001581 Sjc-0008087 * Somatic stem cells:Sjc-0008047(Klf-11)
+p1 <- VlnPlot(Male_seob,features = c('Sjc-0000924','Sjc-0005962','Sjc-0001581','Sjc-0008087','Sjc-0008047','Sjc-0000576'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p1/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+# GSC : "Sjc-0009220"(eled) "Sjc-0006622"(nanos-1) "Sjc-0009231"(boule) "Sjc-0008219"(horm2)
+p2 <- VlnPlot(Male_seob,features = c("Sjc-0009220", "Sjc-0006622", "Sjc-0009231", "Sjc-0008219"),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p2/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+# Neuron: Sjc-0001267(7b2), ciliated neuron: Sjc-0008945(TPPP)
+# KK7 Neuron: Sjc-0002936(kk7)
+p3 <- VlnPlot(Male_seob,features = c("Sjc-0001267", "Sjc-0008116", 
+                                     "Sjc-0008534", "Sjc-0008945",'Sjc-0008047','Sjc-0002936'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+Neuron_marker_vlnplot <- p3/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+
+# Parenchymal: Sjc-0005717(cb2), Sjc-0005093, Sjc-0006652(serpin)
+p4 <- VlnPlot(Male_seob,features = c('Sjc-0005717', 'Sjc-0005093', 'Sjc-0006652'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p4/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+# Tegument progenitors: Sjc-0001087(tp53), Sjc-0000576(Zfp-39)
+# --progeny 2: Sjc-0002985(PLAC8),Sjc-0000004(tsp2,cd63)
+# --progeny 1: Sjc-0000576(Zfp-39)
+# --syncytial: Sjc-0007836(annexin b2),Sjc-0000920(tal),Sjc-0008832(npp5),Sjc-0000125(25kDa-mp)
+p5 <- VlnPlot(Male_seob,features = c('Sjc-0001087', 'Sjc-0000576', 'Sjc-0002985','Sjc-0000004',
+                                     'Sjc-0007836','Sjc-0000920','Sjc-0008832','Sjc-0000125'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p5/(p_1) + plot_layout(ncol = 1,heights = c(1,3))
+
+# Musle -- Early musle progenitors: Sjc-0005298,   *Sjc-0007906(cabp)
+#       -- Late muscle progenitors: Sjc-0002352,   *Sjc-0004691(troponin)
+p6 <- VlnPlot(Male_seob,features = c('Sjc-0007906','Sjc-0004691'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p6/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+# Flame cell: "Sjc-0001697", "Sjc-0000530"
+p7 <- VlnPlot(Male_seob,features = c('Sjc-0001697','Sjc-0000530'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p7/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+Male_seob@meta.data <- Male_seob@meta.data %>% 
+  mutate(Cell_Type = case_when(
+    seurat_clusters %in% c(0,4,7,17,20,24) ~ 'Neoblast',
+    seurat_clusters %in% c(29) ~ 'Germline stem cell',
+    seurat_clusters %in% c(1) ~ 'Neural stem cells',
+    seurat_clusters %in% c(9,10,13,18,21,25) ~ 'Neural precursor cell',
+    # seurat_clusters %in% c(8,14,15,19,22,23,31,37,38,43) ~ 'Nonciliated neuron',
+    # seurat_clusters %in% c(26,30,34,36,42) ~ 'Ciliated neuron',
+    seurat_clusters %in% c(8,15,19,31,38,43) ~ 'Nonciliated neuron',
+    seurat_clusters %in% c(14,22,26,30,34,36,42,37,23) ~ 'Ciliated neuron',
+    
+    seurat_clusters %in% c(16)  ~ 'KK7+ Neuron',
+    seurat_clusters %in% c(5,6,44) ~ 'Parenchyma',
+    seurat_clusters %in% c(2) ~ 'Tegument progenitor',
+    seurat_clusters %in% c(12) ~ 'Tegument progeny 1',
+    seurat_clusters %in% c(3,28,41) ~ 'Tegument progeny 2',
+    seurat_clusters %in% c(33) ~ 'Syncytial 1',
+    seurat_clusters %in% c(27) ~ 'Syncytial 2',
+    seurat_clusters %in% c(11,35) ~ 'Muscle',
+    seurat_clusters %in% c(32) ~ 'Flame cells',
+    seurat_clusters %in% c(39) ~ 'Male gametes',
+    seurat_clusters %in% c(40) ~ 'Esophageal gland'
+  ))
+
+Male_seob@meta.data$Cell_Type <- factor(as.character(Male_seob@meta.data$Cell_Type),
+                                        levels = c('Neoblast','Germline stem cell',
+                                                   'Neural stem cells','Neural precursor cell',
+                                                   'Nonciliated neuron','Ciliated neuron','KK7+ Neuron','Parenchyma','Tegument progenitor',
+                                                   'Tegument progeny 1','Tegument progeny 2',
+                                                   'Syncytial 1',
+                                                   'Syncytial 2',
+                                                   'Muscle',
+                                                   
+                                                   'Flame cells','Male gametes','Esophageal gland'
+                                        ) )
+
+
+# write.csv(Male_seob@meta.data,"../03.tables/Male_seob_cellinfo.csv")
+```
+
+
+## 1.2 Integrated female samples
+
+```{r}
+
+seob_list <- list()
+samples <- c('18dpi_F','22dpi_F','26dpi_F')
+DIR='/public/shycheng/'
+
+for (sample in samples) {
+  #loading data
+  scrna_data <- Read10X(
+    data.dir = paste0(DIR,paste0(sample,'-out'),'/outs/filtered_feature_bc_matrix'))
+  # create seurat object
+  seob <- CreateSeuratObject(
+    counts = scrna_data,
+    project = sample,
+    min.cells = 3, 
+    min.features = 200)
+  # add metadata
+  seob[['sample']] <- sample
+  # save seobs in list
+  seob_list[[sample]] = seob
+}
+
+
+seob <- merge(x = seob_list[[1]],
+              y = seob_list[-1],
+              add.cell.ids = names(seob_list))
+
+seob[["percent.mt"]] <- PercentageFeatureSet( seob,  pattern = "^ND|^C|^ATP")
+seob@meta.data <- seob@meta.data %>% 
+  mutate(Time = case_when(
+    sample == grepl('18dpi',sample) ~ '18dpi',
+    grepl('22dpi',sample) ~ '22dpi',
+    grepl('26dpi',sample) ~ '26dpi'
+  ))
+# filter cells
+seob <- subset(seob,subset = nFeature_RNA > 500 &percent.mt < 30)
+# split object
+seob_list <- SplitObject(seob, split.by = "sample")
+
+
+###########################################################################
+# 2.prepare Data ----------------------------------------------------------
+###########################################################################
+
+# 1. SCTransform
+for(i in 1:length(seob_list)){
+  seob_list[[i]] <- SCTransform(
+    seob_list[[i]], 
+    variable.features.n = 3000,
+    verbose = FALSE)}
+
+
+# 2. Integration
+##
+
+features <- SelectIntegrationFeatures(object.list = seob_list,
+                                      nfeatures = 3000)
+## PrepSCTIntegration
+seob_list <- PrepSCTIntegration(object.list = seob_list, 
+                                anchor.features = features)
+## find anchors
+seob.anchors <- FindIntegrationAnchors(object.list = seob_list, 
+                                       normalization.method = "SCT",
+                                       anchor.features = features)
+
+## this command creates an 'integrated' data assay
+seob <- IntegrateData(anchorset = seob.anchors, normalization.method = "SCT",verbose = F)
+
+###########################################################################
+# 3.reduce dim ----------------------------------------------------------
+###########################################################################
+# 调节参数 --------------------------------------------------------------------
+
+## PCA
+Female_seob <- RunPCA(Female_seob,npcs = 30)
+## t-SNE
+#seob <- RunTSNE(seob, dims = 1:50)
+## UMAP
+Female_seob <- RunUMAP(Female_seob, dims = 1:30)
+Female_seob <- FindNeighbors(Female_seob,dims = 1:30)
+Female_seob <- FindClusters(Female_seob,resolution = 1,random.seed = 1)
+
+Female_seob <- readRDS(file = '/home/shycheng/Projects/scRNA-seq/Results_SingleCell_Sja2021/0.data/Female_seob_CellType.rds')
+
+#saveRDS(Female_seob,file = '/home/R/Projects/scRNA-seq/Results_SingleCell_Sja2021/0.data/Female_seob_CellType.rds')
+
+
+###########################################################################
+# 4.further analysis ------------------------------------------------------
+###########################################################################
+p_1 <- DimPlot(Female_seob, 
+               reduction = "umap", # pca, umap, tsne
+               group.by  = "Cell_Type",
+               #group.by  = "integrated_snn_res.1",
+               label.size = 3,
+               label = T)
+
+
+### CellMarkers -- known
+# Neoblast : Sjc-0000924,Sjc-0005962,Sjc-0001581 Sjc-0008087 * Somatic stem cells:Sjc-0008047(Klf-11)
+p1 <- VlnPlot(Female_seob,features = c('Sjc-0000924','Sjc-0005962','Sjc-0001581','Sjc-0008087','Sjc-0008047','Sjc-0000576'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p1/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+# GSC : "Sjc-0009220"(eled) "Sjc-0006622"(nanos-1) "Sjc-0009231"(boule) "Sjc-0008219"(horm2) 
+# Vi :  Sjc-0000108
+p2 <- VlnPlot(Female_seob,features = c("Sjc-0009220", "Sjc-0006622", "Sjc-0009231", "Sjc-0008219",'Sjc-0000108'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p2/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+# Neuron: Sjc-0001267(7b2), ciliated neuron: Sjc-0008945(TPPP)
+# KK7 Neuron: Sjc-0002936(kk7)
+p3 <- VlnPlot(Female_seob,features = c("Sjc-0001267", "Sjc-0008116", 
+                                       "Sjc-0008534", "Sjc-0008945",'Sjc-0008047','Sjc-0002936'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p3/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+# Parenchymal: Sjc-0005717(cb2), Sjc-0005093, Sjc-0006652(serpin)
+p4 <- VlnPlot(Female_seob,features = c('Sjc-0005717', 'Sjc-0005093', 'Sjc-0006652'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p4/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+# Tegument progenitors: Sjc-0001087(tp53), Sjc-0000576(Zfp-39)
+# --progeny 2: Sjc-0002985(PLAC8),Sjc-0000004(tsp2,cd63)
+# --progeny 1: Sjc-0000576(Zfp-39)
+# --syncytial: Sjc-0007836(annexin b2),Sjc-0000920(tal),Sjc-0008832(npp5),Sjc-0000125(25kDa-mp)
+p5 <- VlnPlot(Female_seob,features = c('Sjc-0001087', 'Sjc-0000576', 'Sjc-0002985','Sjc-0000004',
+                                       'Sjc-0007836','Sjc-0000920','Sjc-0008832','Sjc-0000125'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p5/(p_1) + plot_layout(ncol = 1,heights = c(1,3))
+
+# Musle -- Early musle progenitors: Sjc-0005298,   *Sjc-0007906(cabp)
+#       -- Late muscle progenitors: Sjc-0002352,   *Sjc-0004691(troponin)
+p6 <- VlnPlot(Female_seob,features = c('Sjc-0007906','Sjc-0004691'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p6/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+# Flame cell: "Sjc-0001697", "Sjc-0000530"
+p7 <- VlnPlot(Female_seob,features = c('Sjc-0001697','Sjc-0000530'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+p7/p_1 + plot_layout(ncol = 1,heights = c(1,3))
+
+
+### Female_seob
+Female_seob@meta.data <- Female_seob@meta.data %>% 
+  mutate(Cell_Type = case_when(
+    seurat_clusters %in% c(0,2,3,10,12,16) ~             'Neoblast',
+    seurat_clusters %in% c(8) ~                          'Germline stem cell',
+    seurat_clusters %in% c(1) ~                          'Neural stem cells',
+    seurat_clusters %in% c(4,9,21,26,34,37,38) ~         'Neural precursor cell',
+    seurat_clusters %in% c(11,14,28,32,43) ~                'Nonciliated neuron',
+    seurat_clusters %in% c(13,15,25,31,36,38,41,42,45) ~ 'Ciliated neuron',
+    seurat_clusters %in% c(46)  ~                        'KK7+ Neuron',
+    seurat_clusters %in% c(7) ~                       'Tegument progenitor',
+    seurat_clusters %in% c(6) ~                          'Tegument progeny 1',
+    seurat_clusters %in% c(23) ~                      'Tegument progeny 2',
+    seurat_clusters %in% c(40) ~                         'Syncytial 1',
+    seurat_clusters %in% c(24) ~                         'Syncytial 2',
+    seurat_clusters %in% c(18,19,22,27,29) ~             'Muscle',
+    seurat_clusters %in% c(5,17,33) ~                    'Parenchyma',
+    seurat_clusters %in% c(30) ~                         'Flame cells',
+    seurat_clusters %in% c(20,44) ~                      'Vitellocyte',
+    seurat_clusters %in% c(39) ~                         'Mehlis gland',
+    seurat_clusters %in% c(35) ~                         'Esophageal gland'
+  ))
+
+Female_seob@meta.data$Cell_Type <- factor(as.character(Female_seob@meta.data$Cell_Type),
+                                          levels = c('Neoblast',
+                                                     'Germline stem cell',
+                                                     'Neural stem cells',
+                                                     'Neural precursor cell',
+                                                     'Nonciliated neuron',
+                                                     'Ciliated neuron',
+                                                     'KK7+ Neuron',
+                                                     'Parenchyma',
+                                                     'Tegument progenitor',
+                                                     'Tegument progeny 1',
+                                                     'Tegument progeny 2',
+                                                     'Syncytial 1',
+                                                     'Syncytial 2',
+                                                     'Muscle',
+                                                     'Flame cells',
+                                                     'Vitellocyte',
+                                                     'Mehlis gland',
+                                                     'Esophageal gland') )
+
+
+# write.csv(Female_seob@meta.data,"../03.tables/Female_seob_cellinfo.csv")
+```
+
+
+
+```{r}
+#//
+#  Male_seob_neoblast # Female_seob_neoblast
+
+#/ Neoblast and GSCS ////
+Female_seob <- readRDS('/home/shycheng/Projects/SingleCell_Sja2024/01.rds_files/Female_seob_CellType.rds')
+
+
+Female_seob_neoblast <- subset(Female_seob,subset = Cell_Type %in% c("Neoblast","Germline stem cell",
+                                                                     "Mehlis gland","Vitellocyte") & percent.mt < 5)
+# 20883 features across 11413 samples within 3 assays
+
+
+Male_seob <- readRDS('/home/shycheng/Projects/SingleCell_Sja2024/01.rds_files/Male_seob_CellType.rds')
+Male_seob_neoblast <- subset(Male_seob,subset = Cell_Type %in% c("Neoblast","Germline stem cell","Male gametes") & percent.mt < 5)
+
+# 20887 features across 8425 samples within 3 assays
+
+# run Seurat Integrated pipeline
+# DefaultAssay(Female_seob_neoblast) <- 'RNA'
+# DefaultAssay(Male_seob_neoblast) <- 'RNA'
+# Female_seob_neoblast.list <- SplitObject(Female_seob_neoblast,split.by = 'sample')
+# Male_seob_neoblast.list <- SplitObject(Male_seob_neoblast,split.by = 'sample')
+# 
+# Neoblast.seob.list <- unlist(c(Female_seob_neoblast,
+#                              Male_seob_neoblast.list))
+# 
+# Neoblast.seob.list <- lapply(X = Neoblast.seob.list, FUN = function(x) {
+#   x <- NormalizeData(x)
+#   x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 3000)
+# })
+# 
+# features <- SelectIntegrationFeatures(object.list = Neoblast.seob.list,nfeatures = 3000)
+# Neoblast.anchors <- FindIntegrationAnchors(object.list = Neoblast.seob.list, anchor.features = features)
+# Neoblast.combined <- IntegrateData(anchorset = Neoblast.anchors)
+#  >>> Neoblast.combined 8425 + 11413 cells 
+
+
+Neoblast.combined@meta.data <- Neoblast.combined@meta.data %>% 
+  mutate(Sex = case_when(
+    sample %in% c("18dpi_F","22dpi_F", "26dpi_F") ~ 'Female',
+    sample %in% c("18dpi_M","22dpi_M", "26dpi_M") ~ 'Male',
+    
+  ))
+
+Neoblast.combined <- readRDS(file = '../01.rds_files/Neoblast.combined.rds')
+
+DefaultAssay(Neoblast.combined) <- 'integrated'
+Neoblast.combined <- ScaleData(Neoblast.combined, verbose = T)
+## PCA
+Neoblast.combined <- RunPCA(Neoblast.combined,npcs = 20)
+## UMAP
+Neoblast.combined <- RunUMAP(Neoblast.combined, dims = 1:20)
+## t-SNE
+#Neoblast.combined <- RunTSNE(Neoblast.combined, dims = 1:15)
+Neoblast.combined <- FindNeighbors(Neoblast.combined,dims = 1:20)
+Neoblast.combined <- FindClusters(Neoblast.combined,resolution = 3,random.seed = 1)
+
+Neoblast.combined@meta.data$orig.ident <- factor(Neoblast.combined@meta.data$orig.ident,levels = c('26dpi_F','22dpi_F','18dpi_F', 
+                                                                                                   '18dpi_M', '22dpi_M','26dpi_M'))
+
+
+# Neoblast.combined <- readRDS(file = '../01.rds_files/Neoblast.combined.rds')
+```
+
+
+Vo-lineage cell markers
+```{r fig.height=6, fig.width=12}
+ids <- c(
+  "Sjc-0000108", # S1
+  "Sjc-0003451", # S1 progeny/early
+  "Sjc-0007461", # late vitellocytes
+  "Sjc-0001887", # mature vitellocytes
+  "Sjc-0006753",
+  "Sjc-0003576")
+
+multi_simFP(c(  "Sjc-0000108", # S1
+  "Sjc-0003451", # S1 progeny/early
+  "Sjc-0007461", # late vitellocytes
+  "Sjc-0001887","Sjc-0003576") # mature vitellocytes
+  ,Neoblast.combined)
+```
+
+
+```{r fig.height=12, fig.width=20}
+multi_simFP(c(  "Sjc-0009220","Sjc-0000108", # S1
+  "Sjc-0003451", # S1 progeny/early
+  "Sjc-0007461", # late vitellocytes
+  "Sjc-0001887","Sjc-0003576") # mature vitellocytes
+  ,Neoblast.combined,split.by = "Sex")
+```
+
+
+
+```{r}
+Neoblast.combined$seurat_clusters <- Neoblast.combined$integrated_snn_res.3
+Neoblast.combined@meta.data <- Neoblast.combined@meta.data %>% 
+  mutate(Cell_Type = case_when(
+    seurat_clusters %in% c(2,4,7,10,11,30,33,34) ~             'SSCs-alpha',
+    seurat_clusters %in% c(5,9,13,15) ~                        'SSCs-beta',
+    #seurat_clusters %in% c(0) ~                                'SSCs-beta 2',
+    seurat_clusters %in% c(3,8,16,17,22,40) ~                  'SSCs-gamma 1',
+    seurat_clusters %in% c(18,27) ~                            'SSCs-gamma 2',
+    seurat_clusters %in% c(14,24) ~                            'SSCs-delta',
+    seurat_clusters %in% c(1,29) ~                             'SSCs-epsilon',
+    seurat_clusters %in% c(12) ~                               'SSCs-kappa',
+    seurat_clusters %in% c(6,20) ~                             'S1',
+    seurat_clusters %in% c(21) ~                               'SSCs-nu',
+    seurat_clusters %in% c(0,26,31) ~                          'S1 progeny',
+    seurat_clusters %in% c(32) ~                               'Early Vo',
+    seurat_clusters %in% c(42,38) ~                               'Late Vo',
+    #seurat_clusters %in% c() ~                               'Mature Vo',
+    seurat_clusters %in% c(36) ~                               'Mehlis gland',
+    seurat_clusters %in% c(19,28,35) ~                         'GSCs',
+    seurat_clusters %in% c(23,25) ~                            'GSC progeny',
+    seurat_clusters %in% c(37) ~                               'Female gametophyte',
+    seurat_clusters %in% c(39,41) ~                            'Male gametophyte'
+  ))
+
+Neoblast.combined@meta.data$Cell_Type <- factor(as.character(Neoblast.combined@meta.data$Cell_Type),
+                                                levels = c('SSCs-alpha',
+                                                           'SSCs-beta',
+                                                           'SSCs-gamma 1',
+                                                           'SSCs-gamma 2',
+                                                           'SSCs-delta',
+                                                           'SSCs-epsilon',
+                                                           'SSCs-kappa',
+                                                           #'SSCs-mu',
+                                                           'SSCs-nu',
+                                                           'GSCs',
+                                                           'GSC progeny',
+                                                           'Female gametophyte',
+                                                           'Male gametophyte',
+                                                           'S1',
+                                                           'S1 progeny',
+                                                           'Early Vo',
+                                                           'Late Vo',
+                                                           #'Mature Vo',
+                                                           'Mehlis gland'))
+
+```
+
+
+
+
+
+# 2.FigS6A
+```{r fig.height=4, fig.width=10}
+Idents(Neoblast.combined) <- Neoblast.combined@meta.data$Cell_Type
+FigS6A <- DimPlot(Neoblast.combined, 
+                                  reduction = "umap", # pca, umap, tsne,
+                                  #group.by = 'integrated_snn_res.3',
+                                  group.by = "Cell_Type",
+                                  split.by = 'Sex',
+                                  label.size = 3,ncol = 2,  combine = T,                       
+                                  label = T) + NoAxes() + 
+  scale_color_manual(values = col_vectors[1:length(unique(Neoblast.combined@meta.data$Cell_Type))])
+
+
+ggsave("../02.figures/FigS6A.pdf",width = 10 ,height = 4,plot = FigS6A)
+
+FigS6A
+```
+
+
+
+```{r}
+smp_to_sjc <- function(smp_id) {
+  sjc_id <- tryCatch(
+    {
+      SJDB::revID(getSM2SJ(smp_id)$Sj_GENEID)
+    },
+    error = function(e) {
+      warning(paste("Could not convert", smp_id, "to Sjc ID"))
+      return(NA)
+    }
+  )
+  return(sjc_id)
+}
+
+intramammalian_stages <- list(
+  epsilon = list(
+    markers = c("Smp_041540", "Smp_172480", "Smp_142120", "Smp_341460"),
+    description = "Pluripotent stem cells giving rise to both soma and germline"
+  ),
+  delta_prime = list(
+    markers = c("Smp_175590", "Smp_157300", "Smp_024860", "Smp_172480", 
+                "Smp_139530", "Smp_051920", "Smp_145470"),
+    description = "Somatic stem cells"
+  ),
+  mu = list(
+    markers = c("Smp_340130", "Smp_167400"),
+    description = "Early muscle progenitors"
+  ),
+  mu_prime = list(
+    markers = c("Smp_340130", "Smp_167400", "Smp_015670", "Smp_018250"),
+    description = "Late muscle progenitors"
+  ),
+  tsp2_positive = list(
+    markers = c("Smp_335630"),
+    description = "Tegumental progenitors"
+  ),
+  cpx_positive = list(
+    markers = c("Smp_073270", "Smp_050220"),
+    description = "Neural progenitors"
+  ),
+  cb2_positive = list(
+    markers = c("Smp_141610"),
+    description = "Intestinal/parenchymal progenitors"
+  ),
+  hnf4_positive = list(
+    markers = c("Smp_174700", "Smp_179660"),
+    description = "Intestinal progenitors"
+  ),
+  igsf9b_positive = list(
+    markers = c("Smp_035040", "Smp_335600"),
+    description = "Flame cell progenitors"
+  ),
+  vwa_positive = list(
+    markers = c("Smp_157690"),
+    description = "Mehlis' gland progenitors"
+  ),
+  GSC = list(
+    markers = c("Smp_144860", "Smp_041540", "Smp_055740", "Smp_196950"),
+    description = "Germline stem cells for both sexes"
+  ),
+  GSC_progeny = list(
+    markers = c("Smp_041540", "Smp_169930", "Smp_333540", "Smp_055740", "Smp_328620"),
+    description = "Putative meiotic GSC progeny"
+  ),
+  S1 = list(
+    markers = c("Smp_041540", "Smp_055740", "Smp_248100"),
+    description = "Vitellocyte progenitors"
+  )
+)
+
+# Now, let's convert the Smp IDs to Sjc IDs using the smp_to_sjc function
+intramammalian_stages <- lapply(intramammalian_stages, function(stage) {
+  stage$markers <- sapply(stage$markers, smp_to_sjc)
+  return(stage)
+})
+
+```
+
+
+```{r fig.height=8, fig.width=16}
+lapply(intramammalian_stages, function(x){
+  ids <- x$markers[x$markers %in% rownames(Neoblast.combined)]
+  multi_simFP(ids,Neoblast.combined)
+})
+```
+
+
+
+# 3.Fig2A/FigS6BC/FigS9C
+```{r}
+Idents(Neoblast.combined) <- Neoblast.combined@meta.data$Cell_Type
+ids <- c('Sjc-0000924','Sjc-0005962',"Sjc-0008047",
+         #'Sjc-0001581',
+         'Sjc-0009220','Sjc-0001481','Sjc-0001267',
+         'Sjc-0000674','Sjc-0001890',
+         'Sjc-0005317',"Sjc-0004091",
+         'Sjc-0006622','Sjc-0008219',
+         'Sjc-0004512','Sjc-0003040','Sjc-0000843',
+         'Sjc-0000108','Sjc-0002828',
+         "Sjc-0003451","Sjc-0007461",
+         'Sjc-0006798','Sjc-0006800','Sjc-0000278','Sjc-0000795')
+
+
+lapply(c("Female","Male"), function(sex){
+  for (assay in c("RNA","integrated")) {
+      DefaultAssay(Neoblast.combined) <- assay
+  FigS6B <- DotPlot(Neoblast.combined[,Neoblast.combined$Sex == sex], 
+                    features = ids) +
+  theme(axis.text = element_text(size = 10,hjust = 1),
+        panel.border = element_rect(fill = NULL,linewidth = 1,colour = "black")) + scale_colour_gradientn(colours = c('grey',rev(brewer.pal(n = 11, name = "Spectral"))[-1])) + RotatedAxis() + xlab("") + ylab("")
+  ggsave(sprintf("../02.figures/FigS6B_%s_%s.pdf",sex,assay),width = 7.8,height = 5,plot = FigS6B)
+  }
+})
+
+```
+
+
+# 4.Fig2B
+
+RNA velocity
+```{r}
+source("R/Velocity.R")
+save_filesFORscVelo(Neoblast.combined,filename = "Neoblast.combined",baseDIR = "../04.velocity/")
+```
+
+```{r}
+# run "jupyter/Fig2B.ipynb"
+```
+
+
+
+```{r}
+Idents(Neoblast.combined) <- Neoblast.combined@meta.data$Cell_Type
+job::job({
+  DefaultAssay(Neoblast.combined) <- "RNA"
+  Neoblast_combined_markers <- FindAllMarkers(Neoblast.combined,only.pos = T)
+},import = list(Neoblast.combined))
+
+
+neo_markerlist <- Neoblast_combined_markers %>% 
+  group_by(cluster) %>% 
+  mutate(Annotation = ID2NAME[gene,"Note"]) %>% 
+ dplyr::group_split() 
+  
+writexl::write_xlsx(neo_markerlist,"../02.figures/neo_markerlist.xlsx")
+
+```
+
+
+
+
+
+```{r}
+Male_GSCs.cells <- colnames(subset(Neoblast.combined,subset = Sex=='Male' & Cell_Type %in% c("GSCs","GSC progeny","Male gametophyte")))
+
+Female_GSCs.cells <- colnames(subset(Neoblast.combined,subset = Sex=='Female' & Cell_Type %in% c("GSCs","GSC progeny","Female gametophyte")))
+
+
+Male_GSCs <- Male_seob[,Male_GSCs.cells]
+Male_GSCs <- Male_GSCs%>%
+  RunPCA(npcs = 30) %>% 
+  RunUMAP( dims = 1:30) %>% 
+  FindNeighbors(dims = 1:30) %>% 
+  FindClusters(resolution = 0.3,random.seed = 1)
+
+Male_GSCs@meta.data$Cell_Type <- Neoblast.combined@meta.data[colnames(Male_GSCs),"Cell_Type"]
+
+
+Female_GSCs <- Female_seob[,Female_GSCs.cells]
+Female_GSCs <- Female_GSCs %>% 
+  RunPCA(npcs = 20) %>% 
+  RunUMAP( dims = 1:20) %>% 
+  FindNeighbors(dims = 1:20) %>% 
+  FindClusters(resolution = 0.3,random.seed = 1)
+
+Female_GSCs@meta.data$Cell_Type <-  Neoblast.combined@meta.data[colnames(Female_GSCs),"Cell_Type"]
+```
+
+
+# 5.Fig2CD-umap
+```{r fig.height=3, fig.width=6, message=FALSE}
+Fig2C_a <- DimPlot(Female_GSCs,group.by = "Cell_Type",repel = T,label = T)    +
+  scale_color_manual(values = col_vectors[c(14,15,17)])+ 
+  ggtitle("UMAP of GSCs(female)")+ 
+  theme_pubr(border = T,base_size = 8) + 
+  NoLegend()+ theme(plot.title = element_text(hjust = 0.5,size = 12,face = "bold"),
+                    axis.title = element_blank(),axis.ticks = element_blank(),axis.text = element_blank())
+
+Fig2D_a <- DimPlot(Male_GSCs,group.by = "Cell_Type",repel = T,label = T)  +
+  scale_color_manual(values = col_vectors[c(14,15,16)]) + 
+  ggtitle("UMAP of GSCs(male)") + 
+  theme_pubr(border = T,base_size = 8)  +
+  NoLegend() + theme(plot.title = element_text(hjust = 0.5,size = 12,face = "bold"),
+                     axis.title = element_blank(),axis.ticks = element_blank(),axis.text = element_blank()
+                     )
+
+Fig2CD_umap <- Fig2C_a  + rotate() + Fig2D_a
+ggsave(filename = "../02.figures/Fig2CD_umap.pdf",width = 6,height = 3,plot = Fig2CD_umap)
+```
+
+
+
+
+
+RNA velocity
+```{r}
+source("R/Velocity.R")
+
+save_filesFORscVelo(Female_GSCs,filename = "Female_GSCs",baseDIR = "../04.velocity/")
+save_filesFORscVelo(Male_GSCs,filename = "Male_GSCs",baseDIR = "../04.velocity/")
+```
+
+
+
+
+
+Slingshot
+```{r}
+library(gam)
+library(slingshot)
+library(SingleCellExperiment)
+library(scater)
+library(ggpubr)
+
+sce_male_GSCs <- as.SingleCellExperiment(Male_GSCs,assay = 'RNA')
+sce_male_GSCs <- slingshot(
+  sce_male_GSCs,
+  reducedDim = 'UMAP',
+  clusterLabels = 'Cell_Type',
+  start.clus = "GSCs",thresh = 0.05
+)
+
+
+
+sce_female_GSCs <- as.SingleCellExperiment(Female_GSCs,assay = 'RNA')
+sce_female_GSCs <- slingshot(
+  sce_female_GSCs,
+  reducedDim = 'UMAP',
+  clusterLabels = 'Cell_Type',
+  start.clus = "GSCs",thresh = 0.05
+)
+
+```
+
+
+
+```{r}
+# extract info about pseudotimes from sce
+sds_female_GSCs <- SlingshotDataSet(sce_female_GSCs)
+sds_male_GSCs <- SlingshotDataSet(sce_male_GSCs)
+
+```
+
+
+
+```{r fig.height=4, fig.width=7}
+library(dplyr)
+
+plot_slingshot <- function(sds){
+  test <- data.frame(reducedDims(sds))
+  if (length(sds@lineages) > 1) {
+    pdt_agg1 = apply(slingPseudotime(sds)[,c(1:length(sds@lineages))],1,function(t) mean(t, na.rm=T))
+  }else{
+    
+    pdt_agg1 <- slingPseudotime(sds)
+  }
+  test$pseudotime <- pdt_agg1
+  p <- ggscatter(test,x= 'UMAP_1',y = 'UMAP_2',color = 'pseudotime',size = 0.8) + 
+    gradient_color(palette = rev(brewer.pal(11,'Spectral')[-6])) +
+    theme_pubr(border = T)
+  
+  curves <- slingCurves(sds, as.df = TRUE)
+  arrow_style <- arrow(type = "closed", length = unit(0.1, "inches"))
+  
+  p <- p + geom_path(data = curves %>% arrange(Order),
+                aes(group = Lineage),show.legend = T,arrow = arrow_style) 
+  p
+}
+
+Fig3B <- plot_slingshot(sds_female_GSCs) + plot_slingshot(sds_male_GSCs)
+ggsave("../02.figures/Fig3/Fig3B.pdf",plot = p,width = 7,height = 4)
+
+
+Fig3B
+```
+
+
+# 6.Fig2CD-RNAvelocity
+```{r}
+# run "00.scripts/jupyter/RNAVelocity_neoblast.ipynb"
+
+```
+
+
+
+```{r}
+library(mgcv)
+library(dplyr)
+library(tidyr)
+library(gam)
+library(slingshot)
+Gam_sce_res <- function(sce_obj,
+                        Pseudotime = 'slingPseudotime_1',
+                        nVar = 3000){
+  # select the ptime values
+  ptime <- c(sce_obj[[Pseudotime]])
+  # get cells in that lineage
+  lineage_cells <- colnames(sce_obj)[!is.na(ptime)]
+  # remove values for cells not in the lineage
+  ptime <- ptime[!is.na(ptime)]
+  
+  # Only look at the 1,000 most variable genes when identifying temporally expressesd genes.
+  # Identify the variable genes by ranking all genes by their variance.
+  
+  Y <- log2(counts(sce_obj) + 1)
+  var1K <- names(sort(apply(Y, 1, var),decreasing = TRUE))[1:nVar]
+  Y <- Y[var1K, ]
+
+  # sce_obj <- computeSumFactors(sce_obj)
+  # sce_obj <- logNormCounts(sce_obj)
+  # Y <- logcounts(sce_obj)
+  # var1K <- names(sort(apply(Y, 1, var),decreasing = TRUE))[1:nVar]
+  # Y <- Y[var1K, ]
+  
+  # Fit GAM for each gene using pseudotime as independent variable.
+  t <- sce_obj[[Pseudotime]]
+  gam_results <- apply(Y, 1, function(z){
+    d <- data.frame(z=z, t=t)
+    model <- mgcv::gam(z ~ lo(t), data=d)
+    p <- summary(model)$p.table["lo(t)", "Pr(>|t|)"]
+    preds <- predict(model, type="response")
+    list(p = p, preds = preds)
+  })
+  
+  pvals <- sapply(gam_results, function(x) x$p)
+  range_pr <- sapply(gam_results,  function(x) max(x$preds) - min(x$preds))
+
+  # adjust p value
+  results <- tibble(
+    gene = names(gam_results),
+    pval = pvals,
+    qval = p.adjust(pvals, method = "fdr"),
+    range_pr = range_pr
+  ) %>%
+  arrange(qval)
+
+  return(results)
+}
+
+
+Fit_male_GSCs <- Gam_sce_res(sce_male_GSCs)
+Fit_female_GSCs <- Gam_sce_res(sce_female_GSCs)
+
+Fit_male_GSCs$Gene_Name <- toupper(ID2NAME[Fit_male_GSCs$gene,"Gene_Name"])
+Fit_female_GSCs$Gene_Name <- toupper(ID2NAME[Fit_female_GSCs$gene,"Gene_Name"])
+
+Fit_male_GSCs$Annotation <- ID2NAME[Fit_male_GSCs$gene,"Note"]
+Fit_female_GSCs$Annotation <- ID2NAME[Fit_female_GSCs$gene,"Note"]
+
+Fit_female_GSCs <- as.data.frame(Fit_female_GSCs)
+rownames(Fit_female_GSCs) <- Fit_female_GSCs$gene
+
+Fit_male_GSCs <- as.data.frame(Fit_male_GSCs)
+rownames(Fit_male_GSCs) <- Fit_male_GSCs$gene
+
+
+
+```
+
+
+# 7.FigS7A
+```{r fig.height=3, fig.width=6.5}
+library(ggplot2)
+plot_gamres <- function(gam_res,A_cutoff = 0.5,q_cutoff = 1e-5){
+  q_cutoff = quantile(gam_res$qval,0.25)
+  A_cutoff = 0.5
+   
+  gam_res <- gam_res %>% 
+  mutate(colors = if_else(
+    qval < q_cutoff & range_pr > A_cutoff,
+    "red",
+    "grey"
+  ))
+
+  p <- ggplot(gam_res, aes(x = range_pr, y = qval, color = colors)) +
+    geom_point() +
+    scale_y_log10() + 
+    scale_color_identity() + # This tells ggplot to use the colors as they are specified in the data
+    xlab("A") + 
+    ylab("FDR") + 
+    geom_vline(xintercept  = A_cutoff,linetype = 'dashed') + 
+    geom_hline(yintercept  = q_cutoff,linetype = 'dashed') + 
+    annotate("text", x = 4, y = 1e-20, label = sprintf("N = %s",nrow(gam_res[gam_res$colors == "red",])), vjust = 0, color = "red") +
+    theme_bw()
+  p
+}
+
+FigS7A <- plot_gamres(Fit_male_GSCs) + plot_gamres(Fit_female_GSCs)
+ggsave("../02.figures/FigS7A.pdf",plot = p,width = 6.5,height = 3)
+FigS7A
+```
+
+
+```{r}
+library(VennDetail)
+am <- Fit_male_GSCs %>% 
+  filter(qval < 1e-5 & range_pr > quantile(Fit_male_GSCs$range_pr)[4])
+
+af <- Fit_female_GSCs %>% 
+  filter(qval < 1e-5 & range_pr > quantile(Fit_female_GSCs$range_pr)[4])
+
+venn_res <- venndetail(list(
+  female = af$gene,
+  male = am$gene
+))
+
+
+com.Genes <- venn_res@result[venn_res@result$Subset == 'Shared',"Detail"]
+f.Genes <- venn_res@result[venn_res@result$Subset == 'female',"Detail"]
+m.Genes <- venn_res@result[venn_res@result$Subset == 'male',"Detail"]
+
+
+f1 <- Fit_female_GSCs[com.Genes,][,c(1:4)]
+colnames(f1) <- c("gene",paste0(colnames(f1)[-1],".f"))
+
+m1 <- Fit_male_GSCs[com.Genes,][,c(2:6)]
+colnames(m1) <- c(paste0(colnames(m1)[-c(4,5)],".m"),"Gene_Name","Annotation")
+
+
+writexl::write_xlsx(x = list(
+  sigGenes_female = Fit_female_GSCs[f.Genes,],
+  sigGenes_male = Fit_male_GSCs[m.Genes,],
+  sigGenes_shared = cbind(f1,m1)
+),path = "../02.figures/fitGAM_GSCs_sigGenesList.xlsx",col_names = T)
+
+
+sig_Genes <- list(
+  sigGenes_female = Fit_female_GSCs[f.Genes,],
+  sigGenes_male = Fit_male_GSCs[m.Genes,],
+  sigGenes_shared = cbind(f1,m1)
+)
+```
+
+
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+
+peusdotime_heatmap <- function(
+    sce_obj,
+    Pseudotime = 'slingPseudotime_1',
+    Gam_fit_res,umapplot_sce,
+    col_map = colorRamp2(seq(-2, 2,4/(length(cList$`Blue-Yellow-Red`)-1)), cList$`Blue-Yellow-Red`),
+    names_colors_cell = c("ESCs", "GSCs", "GSC progeny", "Male gametophyte"),
+    sample_color = col_vectors[21:23],
+    names_sample_color = c('18dpi_M','22dpi_M','26dpi_M'),
+    markGenes = NULL,
+    ht_width = unit(3.5,"cm"),
+    nGenes = NA,
+    GeneIDs = NA,
+    row_km = 1,
+    heatmap_name = 'Z-score',
+    smooth = FALSE){
+
+  # 1.prepare data
+  if (is.na(nGenes)) {
+    subGam_fit_res <- na.omit(Gam_fit_res[GeneIDs,])
+  }else{
+    subGam_fit_res <- Gam_fit_res[1:nGenes,]
+  }
+  subGam_fit_res$order <- 1:nrow(subGam_fit_res)
+  
+  to_plot <- as.matrix(log2(counts(sce_obj) + 1)[subGam_fit_res$gene, colnames(sce_obj)])
+  
+  ptime <- c(sce_obj[[Pseudotime]])
+  # 1.1 get cells in that lineage
+  lineage_cells <- colnames(sce_obj)[!is.na(ptime)]
+  # 1.2 remove values for cells not in the lineage
+  ptime <- ptime[!is.na(ptime)]
+  
+  ptime_order <- colnames(to_plot)[order(ptime)]
+  
+  # 2.add useful annotations
+  g1 = ggplot_build(umapplot_sce)
+  color_seurat = g1$data[[1]] %>% group_by(group) %>% dplyr::summarise(cols = dplyr::first(colour))
+  colors_cell = c(color_seurat$cols)
+  names(colors_cell) <- names_colors_cell
+  sample_color <- sample_color
+  names(sample_color) <- names_sample_color
+  Pseudotime_color <- 'red'
+  names(Pseudotime_color) <- 'Pseudotime'
+  
+  annotations <- colData(sce_obj)[colnames(sce_obj), 
+                                        c("slingPseudotime_1", 
+                                          "NewCellType", 
+                                          "sample")] %>% as.data.frame()
+  
+  ha <- HeatmapAnnotation(Pseudotime = annotations$slingPseudotime_1,
+                          Cell_Type  = annotations$NewCellType,
+                          sample = annotations$sample,
+                          col = list(Pseudotime=colorRamp2(c(min(annotations$slingPseudotime_1),
+                                                             max(annotations$slingPseudotime_1)),
+                                                           c("white","red")),
+                                     Cell_Type = colors_cell,
+                                     sample = sample_color))
+  
+  
+  if (!is.null(markGenes)) {
+      # all genes
+    rowGene <- rownames(mat)
+    annoGene <- markGenes$id
+    
+    index <- match(annoGene,rowGene)
+    geneMark = ComplexHeatmap::anno_mark(at = index,
+                                         labels = markGenes$name,
+                                         which = "row",
+                                         side = "left",
+                                         labels_gp = grid::gpar(fontface = "italic",
+                                                                fontsize = 8,
+                                                                col = markGenes$col)
+                                         )
+    left_annotation = rowAnnotation(geneMark = geneMark)
+  }else{
+    left_annotation = NULL
+  }
+  
+  
+  # 3.plot heatmap
+  
+  to_plot <- t(scale(t(to_plot)))
+  
+  if (smooth == TRUE) {
+      pt.matrix <- to_plot 
+      pt.matrix <- t(apply(pt.matrix,1,function(x){smooth.spline(x,df=3)$y}))
+      pt.matrix <- t(apply(pt.matrix,1,function(x){(x-mean(x))/sd(x)}))
+      rownames(pt.matrix) <- rownames(to_plot)
+      colnames(pt.matrix) <- colnames(to_plot)
+      dat = pt.matrix
+  }else{
+      dat <- to_plot
+      q10 <- quantile(dat,0.05)
+      q90 <- quantile(dat,0.95)
+      dat[dat < q10] <- q10
+      dat[dat > q90] <- q90
+  }
+
+  
+  heatmap_fitGenes <- Heatmap(dat,
+                              column_order = ptime_order,
+                              show_column_names = FALSE,
+                              show_row_names = F,row_names_centered = F,
+                              clustering_method_rows = "complete",
+                              width = ht_width,
+                              row_km = row_km,col = col_map,
+                              top_annotation = ha,left_annotation  = left_annotation,
+                              name = heatmap_name)
+  heatmap_fitGenes
+}
+
+
+smoothMatrix <- function(to_plot){
+  pt.matrix <- to_plot
+  pt.matrix <- t(apply(pt.matrix,1,function(x){smooth.spline(x,df=3)$y}))
+  pt.matrix <- t(apply(pt.matrix,1,function(x){(x-mean(x))/sd(x)}))
+  rownames(pt.matrix) <- rownames(to_plot)
+  colnames(pt.matrix) <- colnames(to_plot)
+  pt.matrix
+}
+
+getGroupMat <- function(
+    sce_obj,
+    Pseudotime = "slingPseudotime_1",
+    select_genes = NULL,
+    time_reverse = FALSE
+    ){
+  
+  ptime <- c(sce_obj[[Pseudotime]])
+  # 1.1 get cells in that lineage
+  lineage_cells <- colnames(sce_obj)[!is.na(ptime)]
+  # 1.2 remove values for cells not in the lineage
+  ptime <- ptime[!is.na(ptime)]
+  names(ptime) <- lineage_cells
+  
+  breaks <- quantile(ptime, probs = seq(0, 1, length.out = 101))
+  # 使用cut函数创建bins
+  ptime_bins <- cut(ptime, breaks = breaks, labels = FALSE, include.lowest = TRUE)
+  groupList <- split(lineage_cells,ptime_bins)
+  breaks <- seq(0, 100, 1)
+  names(groupList) <- paste0("T.", breaks[-length(breaks)], "_", breaks[-1])
+  
+  Y <- log2(counts(sce_obj) + 1)[,lineage_cells]
+  RNA_mat <- Y[,lineage_cells]
+  
+  mat_group <- matrix(0, nrow = nrow(RNA_mat), ncol = length(groupList))
+  
+  for(z in seq_along(groupList)){
+  
+    #Check Cells In Group
+    cellsGroupz <- groupList[[z]]
+    idx <- BiocGenerics::which(colnames(RNA_mat) %in% cellsGroupz)
+  
+    #If In Group RowSums
+    if(length(idx) > 0){
+      mat_group[,z] <- mat_group[,z] + Matrix::rowSums(RNA_mat[,idx,drop=FALSE])
+    }
+  }
+  colnames(mat_group) <- names(groupList)  
+  rownames(mat_group) <- rownames(RNA_mat)
+  
+  if (!is.null(select_genes)) {
+    mat_group <- mat_group[select_genes,]
+  }
+  
+  if (time_reverse == TRUE) {
+    mat_group <- mat_group[,rev(names(groupList))]
+  }
+  mat_group
+}
+
+```
+
+
+```{r}
+mat_group_f <- getGroupMat(sce_female_GSCs,select_genes = com.Genes,time_reverse = T)
+mat_group_m <- getGroupMat(sce_male_GSCs,select_genes = com.Genes)
+
+colnames(mat_group_f) <- paste0('f.',colnames(mat_group_f))
+colnames(mat_group_m) <- paste0('m.',colnames(mat_group_m))
+
+mat_group <- cbind(mat_group_f,mat_group_m)
+```
+
+
+# 8.FigS7B
+
+```{r fig.height=5, fig.width=8}
+library(scRNAtoolVis)
+library(ClusterGVis)
+to_plot <- cbind(smoothMatrix(mat_group_f),smoothMatrix(mat_group_m))
+# kmeans
+ck <- clusterData(exp = to_plot,
+                  cluster.method = "kmeans",
+                  cluster.num = 5)
+
+
+ck_wideres <- ck$wide.res
+
+ck_wideres$A <- sqrt(Fit_female_GSCs[com.Genes,'range_pr']^2 + Fit_male_GSCs[com.Genes,'range_pr']^2)
+markers <- ck_wideres %>% 
+  group_by(cluster) %>% 
+  top_n(wt = A,n = 2) %>% 
+  .$gene
+
+
+ptime <- c(rev(seq(0, 1, length.out = 100)),seq(0, 1, length.out = 100))
+topha = HeatmapAnnotation(Pseudotime = ptime,
+                          col = list(Pseudotime=  colorRamp2(seq(0, 1,1/(length(cList$`Blue-Yellow-Red`)-1)), cList$`Blue-Yellow-Red`)
+
+                                     )
+                          )
+pdf("../02.figures/FigS7B.pdf",width = 8,height = 4.8)
+visCluster(object = ck,
+           plot.type = "both",
+           sample.group = rep(c("Female","Male"),each = 100),
+           HeatmapAnnotation = topha,markGenes = markers,
+           add.sampleanno = T)
+dev.off()
+
+```
+
+
+
+# 9.FigS7C
+```{r}
+mat_group_f <- getGroupMat(sce_female_GSCs)
+ck_f <- clusterData(exp = na.omit(smoothMatrix(mat_group_f)[f.Genes,]),
+                  cluster.method = "kmeans",
+                  cluster.num = 5)
+makers <- ck$wide.res %>%
+  mutate(A = Fit_female_GSCs[gene,"range_pr"]) %>% 
+  group_by(cluster) %>% 
+  top_n(wt = A,n = 2) %>% 
+  .$gene
+
+ptime <- seq(0, 1, length.out = 100)
+topha = HeatmapAnnotation(Pseudotime = ptime,
+                          col = list(Pseudotime=  colorRamp2(seq(0, 1,1/(length(cList$`Blue-Yellow-Red`)-1)),cList$`Blue-Yellow-Red`)))
+
+pdf("../02.figures/FigS7C.pdf",width = 6.8,height = 6)
+
+visCluster(object = ck,
+           plot.type = "both",
+           HeatmapAnnotation = topha,markGenes = makers,
+           add.sampleanno = T)
+dev.off()
+```
+
+
+
+
+# 10.FigS7D
+```{r}
+mat_group_m <- getGroupMat(sce_male_GSCs)
+ck_m <- clusterData(exp = na.omit(smoothMatrix(mat_group_m)[m.Genes,]),
+                  cluster.method = "kmeans",
+                  cluster.num = 5)
+
+ptime <- seq(0, 1, length.out = 100)
+topha = HeatmapAnnotation(Pseudotime = ptime,
+                          col = list(Pseudotime=  colorRamp2(seq(0, 1,1/(length(cList$`Blue-Yellow-Red`)-1)),cList$`Blue-Yellow-Red`)))
+
+
+makers <- ck$wide.res %>%
+  mutate(A = Fit_male_GSCs[gene,"range_pr"]) %>% 
+  group_by(cluster) %>% 
+  top_n(wt = A,n = 2) %>% 
+  .$gene
+
+
+pdf("../02.figures/FigS7D.pdf",width = 6.8,height = 6)
+visCluster(object = ck,
+           plot.type = "both",
+           HeatmapAnnotation = topha,markGenes = makers,
+           add.sampleanno = T)
+dev.off()
+
+```
+
+
+
+
+```{r}
+sig_Genes$sigGenes_female$cluster <- paste0("C",ck_f$wide.res[sig_Genes$sigGenes_female$gene,]$cluster)
+
+sig_Genes$sigGenes_male$cluster <- paste0("C",ck_m$wide.res[sig_Genes$sigGenes_male$gene,]$cluster)
+
+sig_Genes$sigGenes_shared$cluster <- paste0("C",ck$wide.res[sig_Genes$sigGenes_shared$gene,]$cluster)
+
+filter_sigGenes <- function(sigGenes_df,filter = TRUE){
+  rank_col <- colnames(sigGenes_df)[grepl("qval",colnames(sigGenes_df))][1]
+  if (filter == TRUE) {
+    sigGenes_df <- sigGenes_df %>% dplyr::filter(!is.na(Gene_Name))
+  }
+  sigGenes_df <- sigGenes_df %>% 
+    dplyr::arrange(cluster,{rank_col})
+  
+  return(sigGenes_df)
+}
+
+sig_Genes_filter <- lapply(sig_Genes, filter_sigGenes)
+sig_Genes_raw <- lapply(sig_Genes, filter_sigGenes,filter = FALSE)
+
+writexl::write_xlsx(x = sig_Genes_filter,path = "../02.figures/fitGAM_GSCs_sigGenesList_filter.xlsx",col_names = T)
+writexl::write_xlsx(x = sig_Genes_raw,path = "../02.figures/fitGAM_GSCs_sigGenesList_raw.xlsx",col_names = T)
+```
+
+
+# 11.FigS8
+```{r fig.height=4, fig.width=12}
+pdf(file = "../02.figures/Fig2A.pdf",width = 12,height = 4)
+lapply(c("Sjc-0000108","Sjc-0000795","Sjc-0006798"), function(id){
+  
+  p <- simFP(id = id,seob = subset(Neoblast.combined,subset = Sex == "Female"),label = F,repel = T,split.by = "sample",
+             pt.size = 0.05,label.size = 3,cols = c("grey", "red"),
+             min.cutoff = 'q10',max.cutoff = 'q90') &
+    #ggtitle(label = paste0(id,"(",id2name[id,"Gene_Name"],")")) &
+    theme(panel.border = element_rect(fill = NA,linewidth = 1,colour = 'black'),
+          plot.title = element_text(face = "italic"),
+          legend.position = "none")
+  print(p)
+  
+})
+dev.off()
+```
+
+
+# 12.FigS9A
+```{r fig.height=6, fig.width=8}
+library(reshape2)
+library(ggpubr)
+library(ggalluvial)
+
+Idents(Neoblast.combined) <- Neoblast.combined@meta.data$Cell_Type
+df <- Neoblast.combined@meta.data %>% 
+  dplyr::select("sample","Cell_Type") %>% 
+  table() 
+df <-  as.data.frame(prop.table(df,1) * 100)
+df$sample <- factor(df$sample,levels = c('26dpi_F','22dpi_F','18dpi_F',
+                                         '18dpi_M', '22dpi_M','26dpi_M'))
+
+
+df$Sex <- if_else(grepl("F",df$sample),"Female","Male")
+
+FigS9A <- map(split(df,df$Sex),function(d){
+  ggplot(d,
+             aes(x = sample, stratum = Cell_Type, alluvium = Cell_Type,
+                 y = Freq,
+                 fill = Cell_Type, label = Cell_Type)) +
+  scale_x_discrete(expand = c(.1, .1)) +
+  scale_fill_manual(values = col_vectors[1:length(unique(Neoblast.combined@meta.data$Cell_Type))]) + 
+  geom_flow() +
+  geom_stratum(stat = "alluvium",
+               color = "darkgray") +
+  theme(legend.position = "right",   axis.line = element_blank(),panel.background=element_blank()) +
+  ggtitle("Frequency of cells in different conditions")
+}) %>% patchwork::wrap_plots(ncol = 2,guides = "collect")
+
+
+#ggsave(filename = "../02.figures/FigS9A.pdf",width = 8,height = 6,plot = FigS9A)
+FigS9A
+```
+
+
+
+# 13.FigS9B
+
+```{r fig.height=4, fig.width=6}
+FigS9B <- barplot_per(Neoblast.combined,colValues = c(
+  "#B2182B", "#EF8A62", "#FDDBC7" , "#D1E5F0", "#67A9CF", "#2166AC"
+)
+#,levels = c('26dpi_F','22dpi_F','18dpi_F','18dpi_M', '22dpi_M','26dpi_M')
+) + xlab("") + theme(axis.text.x = element_text(angle = 90, hjust = 0, vjust = 0.2,face = 'bold'))
+
+ggsave("../02.figures/Analysis_20241126/FigS9B.pdf",width = 6,height = 4,plot = FigS9B)
+FigS9B
+```
+
+

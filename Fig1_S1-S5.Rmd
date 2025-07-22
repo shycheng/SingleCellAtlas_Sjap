@@ -1,0 +1,868 @@
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(RColorBrewer)
+  library(magrittr)
+  library(tidyverse)
+  library(ggplot2)
+  library(ggpubr)
+  library(SJDB)
+  library(patchwork)
+  library(SeuratWrappers)
+  library(clusterProfiler)
+}
+)
+
+source("R/plotFunctions.R")
+```
+
+
+# 1.Pre-processing
+```{r}
+
+###########################################################################
+# 1.loading Data ----------------------------------------------------------
+###########################################################################
+source("R/plotFunctions.R")
+
+seob_list <- list()
+samples <- c('14dpi','18dpi_F','18dpi_M','22dpi_F','22dpi_M','26dpi_F','26dpi_M')
+DIR='/public/shycheng/'
+
+for (sample in samples) {
+  #loading data
+  scrna_data <- Read10X(
+    data.dir = paste0(DIR,paste0(sample,'-out'),'/outs/filtered_feature_bc_matrix'))
+  # create seurat object
+  seob <- CreateSeuratObject(
+    counts = scrna_data,
+    project = sample,
+    min.cells = 3, 
+    min.features = 200)
+  
+  # add metadata
+  seob[['sample']] <- sample
+  
+  # save seobs in list
+  seob_list[[sample]] = seob
+}
+
+seob <- merge(x = seob_list[[1]],
+              y = seob_list[-1],
+              add.cell.ids = names(seob_list))
+
+seob[["percent.mt"]] <- PercentageFeatureSet(
+  seob, 
+  pattern = "^ND|^C|^ATP"
+)
+
+seob@meta.data <- seob@meta.data %>% 
+  mutate(Type = case_when(
+    sample == '14dpi' ~ '14dpi',
+    grepl('_F',sample) ~ 'Female',
+    TRUE ~ "Male"
+  ))
+
+seob@meta.data <- seob@meta.data %>% 
+  mutate(Time = case_when(
+    sample == '14dpi' ~ '14dpi',
+    grepl('18dpi',sample) ~ '18dpi',
+    grepl('22dpi',sample) ~ '22dpi',
+    grepl('26dpi',sample) ~ '26dpi'
+  ))
+
+QC <- VlnPlot(seob, 
+                  features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+                  group.by  = "sample",
+                  log = T,
+                  pt.size = 0.1)
+
+#ggsave(filename = '/home/shycheng/Projects/scRNA-seq/00.Rcode_SingleCell_Sja2024/figures/QC.png',plot = QC,width = 12,height = 6,dpi=360)
+
+
+# filter cells
+seob <- subset(seob,subset = nFeature_RNA > 500 &percent.mt < 30)
+
+# split object
+seob_list <- SplitObject(seob, split.by = "sample")
+
+
+###########################################################################
+# 2.prepare Data ----------------------------------------------------------
+###########################################################################
+
+# 1. SCTransform
+for(i in 1:length(seob_list)){
+  seob_list[[i]] <- SCTransform(
+    seob_list[[i]], 
+    variable.features.n = 3000,
+    verbose = FALSE)
+}
+
+
+# 2. Integration
+##
+plan("multiprocess", workers = 8)
+
+features <- SelectIntegrationFeatures(object.list = seob_list,
+                                      nfeatures = 3000)
+## PrepSCTIntegration
+seob_list <- PrepSCTIntegration(object.list = seob_list, 
+                                anchor.features = features)
+## find anchors
+seob.anchors <- FindIntegrationAnchors(object.list = seob_list, 
+                                       normalization.method = "SCT",
+                                       anchor.features = features)
+
+## this command creates an 'integrated' data assay
+to_integrate <- Reduce(intersect, lapply(seob_list, rownames))
+
+seob <- IntegrateData(anchorset = seob.anchors, normalization.method = "SCT",
+                      features.to.integrate = to_integrate,verbose = TRUE)
+
+
+###########################################################################
+# 3.reduce dim ----------------------------------------------------------
+###########################################################################
+
+## PCA
+seob <- RunPCA(seob,npcs = 100)
+## t-SNE
+seob <- RunTSNE(seob, dims = 1:100)
+## UMAP
+seob <- RunUMAP(seob, dims = 1:100)
+seob <- FindNeighbors(seob,dims = 1:100)
+seob <- FindClusters(seob,resolution = 2,random.seed = 1)
+
+# save files
+#saveRDS(object = seob,'/home/R/Projects/scRNA-seq/data/seob_dim100_20210524_res2.rds')
+seob <- readRDS('/home/shycheng/Projects/scRNA-seq/data/seob_dim100_20210524_res2.rds')
+
+
+### CellMarkers -- known
+# Neoblast : Sjc-0000924,Sjc-0005962,Sjc-0001581 Sjc-0008087 * Somatic stem cells:Sjc-0008047(Klf-11)
+p1 <- VlnPlot(seob,features = c('Sjc-0000924','Sjc-0005962','Sjc-0001581','Sjc-0008087','Sjc-0008047','Sjc-0000576'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+
+# GSC : "Sjc-0009220"(eled) "Sjc-0006622"(nanos-1) "Sjc-0009231"(boule) "Sjc-0008219"(horm2) 
+# Vi :  Sjc-0000108
+p2 <- VlnPlot(seob,features = c("Sjc-0009220", "Sjc-0006622", "Sjc-0009231", "Sjc-0008219",
+                                'Sjc-0000108',"Sjc-0000820"),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+
+
+# Neuron: Sjc-0001267(7b2), ciliated neuron: Sjc-0008945(TPPP)
+# KK7 Neuron: Sjc-0002936(kk7)
+p3 <- VlnPlot(seob,features = c("Sjc-0001267", "Sjc-0008116", 'Sjc-0000814',
+                                "Sjc-0008534", "Sjc-0008945",'Sjc-0008047','Sjc-0002936'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+
+
+# Parenchymal: Sjc-0005717(cb2), Sjc-0005093, Sjc-0006652(serpin)
+p4 <- VlnPlot(seob,features = c('Sjc-0005717', 'Sjc-0005093', 'Sjc-0006652'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+
+
+# Tegument progenitors: Sjc-0001087(tp53), Sjc-0000576(Zfp-39)
+# --progeny 2: Sjc-0002985(PLAC8),Sjc-0000004(tsp2,cd63)
+# --progeny 1: Sjc-0000576(Zfp-39)
+# --syncytial: Sjc-0007836(annexin b2),Sjc-0000920(tal),Sjc-0008832(npp5),Sjc-0000125(25kDa-mp)
+p5 <- VlnPlot(seob,features = c('Sjc-0001087', 'Sjc-0000576', 'Sjc-0002985','Sjc-0000004',
+                                'Sjc-0007836','Sjc-0000920','Sjc-0008832','Sjc-0000125'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+
+
+# Musle -- Early musle progenitors: Sjc-0005298,   *Sjc-0007906(cabp)
+#       -- Late muscle progenitors: Sjc-0002352,   *Sjc-0004691(troponin)
+p6 <- VlnPlot(seob,features = c('Sjc-0007906','Sjc-0004691'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+
+
+# Flame cell: "Sjc-0001697", "Sjc-0000530"
+p7 <- VlnPlot(seob,features = c('Sjc-0001697','Sjc-0000530'),
+              pt.size = 0,stack = T,flip = T) + NoLegend()
+
+
+
+###########################################################################
+# 4.cell annotation ----------------------------------------------------------
+###########################################################################
+# Major differentiated cell types 
+
+seob@meta.data <- seob@meta.data %>% 
+  mutate(Cell_Type = case_when(
+    seurat_clusters %in% c(1,2,7,9,11,14,15,18,31,
+                           33,57,59,73,74) ~          'Neoblast',
+    seurat_clusters %in% c(44,47,56) ~                'Germline stem cell',
+    seurat_clusters %in% c(0,22,71) ~                 'Neural stem cells',
+    seurat_clusters %in% c(5,8,25,32,34,37,40,
+                           43,48,49,53,63,64,68) ~    'Neural precursor cell',
+    seurat_clusters %in% c(17,27,60) ~  'Nonciliated neuron',
+    seurat_clusters %in% c(23,36,37,42,45,52,
+                           3,20,26,50,61, # ??? tppp(Sjc-0008945)
+                           54,63,64,67,68) ~          'Ciliated neuron',
+    seurat_clusters %in% c(58)  ~                     'KK7+ Neuron',
+    seurat_clusters %in% c(4,6,28,51,72) ~            'Parenchyma',
+    seurat_clusters %in% c(13,19,30) ~                'Tegument progenitor',
+    seurat_clusters %in% c(24) ~                      'Tegument progeny 1',
+    seurat_clusters %in% c(16,29,35) ~                'Tegument progeny 2',
+    seurat_clusters %in% c(55) ~                      'Syncytial 1',
+    seurat_clusters %in% c(39) ~                      'Syncytial 2',
+    seurat_clusters %in% c(10,12,21,38,65) ~          'Muscle',
+    seurat_clusters %in% c(41) ~                      'Flame cells',
+    seurat_clusters %in% c(66) ~                      'Gut',
+    seurat_clusters %in% c(62) ~                      'Vitellocyte',
+    seurat_clusters %in% c(69) ~                      'Mehlis gland',
+    seurat_clusters %in% c(70) ~                      'Male gametes',
+    seurat_clusters %in% c(46) ~                      'Esophageal gland'         #'Unknown', modified 20240422
+  ))
+
+
+DefaultAssay(seob) <- 'RNA'
+cb_cells <- WhichCells(seob,expression = `Sjc-0000153` > 0 | `Sjc-0000045` > 0 |`Sjc-0002267` > 0 )
+nongut_cells <- rownames(seob@meta.data[seob@meta.data$seurat_clusters == "66",])[!rownames(seob@meta.data[seob@meta.data$seurat_clusters == "66",]) %in% cb_cells  ]
+seob@meta.data[nongut_cells,"Cell_Type"] <- "Unknown"
+
+
+
+seob@meta.data$Cell_Type <- factor(as.character(seob@meta.data$Cell_Type),
+                                   levels = c('Neoblast',
+                                              'Germline stem cell',
+                                              'Neural stem cells',
+                                              'Neural precursor cell',
+                                              'Nonciliated neuron',
+                                              'Ciliated neuron',
+                                              'KK7+ Neuron',
+                                              'Parenchyma',
+                                              'Tegument progenitor',
+                                              'Tegument progeny 1',
+                                              'Tegument progeny 2',
+                                              'Syncytial 1',
+                                              'Syncytial 2',
+                                              'Muscle',
+                                              'Flame cells',
+                                              'Gut',
+                                              'Vitellocyte',
+                                              'Mehlis gland',
+                                              'Male gametes',
+                                              'Esophageal gland',
+                                              'Unknown'))  #'Unknown', modified 20240422
+
+#saveRDS(seob,"01.rds_files/seob_dim100_res2_celltype.rds")
+```
+
+
+# 2.Fig1B
+```{r fig.height=7, fig.width=12}
+library(ggpubr)
+library(RColorBrewer)
+
+Idents(seob) <- seob@meta.data$Cell_Type
+umapplot_seob <- DimPlot(seob, 
+                         reduction = "umap", 
+                         group.by  = "Cell_Type",
+                         label.size = 4,repel = T,
+                         label = T,raster = F) + NoAxes() + theme(text = element_text(size=18)) +
+  scale_color_manual(values = c("#7FC97F", "#BEAED4", brewer.pal(4,'Oranges'), "#D95F02", "#7570B3",
+                                brewer.pal(5,'Blues'),"#E7298A","#1F78B4", "#B2DF8A",
+                                "#33A02C", "#FB9A99", "#E31A1C","#FFFF99", "grey" ))
+
+
+ggsave(filename = '../02.figures/Fig1/Fig1B.pdf',
+       width = 12,height = 7,plot = umapplot_seob)
+
+umapplot_seob
+```
+
+
+# 3.Fig1C
+```{r}
+library(Seurat)
+library(reshape2)
+library(ggpubr)
+library(ggalluvial)
+Idents(seob) <- seob@meta.data$Cell_Type
+getCellprop_tab <- function(Seob,umap_plot,n){
+  df = data.frame(cluster=Seob@meta.data[["seurat_clusters"]], day=Seob@meta.data[["orig.ident"]], Seob@reductions$umap@cell.embeddings,Cell_type = Seob@meta.data$Cell_Type)
+  g1 = ggplot_build(umap_plot)
+  color_seurat = g1$data[[1]] %>% group_by(group) %>% dplyr::summarise(cols = dplyr::first(colour))
+  df_type = with(df, table(day, Cell_type))
+  df_type = as.data.frame(prop.table(df_type,1) * 100)
+  df_type$cols <- rep(color_seurat$cols,each = n)
+  return(df_type)
+}
+
+seob_CellProp <- getCellprop_tab(seob,umapplot_seob,n = 7)
+seob_CellProp <- dcast(seob_CellProp[,1:3],Cell_type ~ day) #[,c(1,5,4,3,2,6,7,8)]
+
+df <- seob@meta.data %>% 
+  dplyr::select("sample","Cell_Type") %>% 
+  table() 
+
+df <-  as.data.frame(prop.table(df,1) * 100)
+df$sample <- factor(df$sample,levels = c('26dpi_F','22dpi_F','18dpi_F',"14dpi", 
+                                         '18dpi_M', '22dpi_M','26dpi_M'))
+
+Fig1C <- ggplot(df,
+             aes(x = sample, stratum = Cell_Type, alluvium = Cell_Type,
+                 y = Freq,
+                 fill = Cell_Type, label = Cell_Type)) +
+  scale_x_discrete(expand = c(.1, .1)) +
+  scale_fill_manual(values = c("#7FC97F", "#BEAED4", brewer.pal(4,'Oranges'), "#D95F02", "#7570B3",
+                               brewer.pal(5,'Blues'),"#E7298A","#1F78B4", "#B2DF8A",
+                               "#33A02C", "#FB9A99", "#E31A1C","#FFFF99", "grey" )) + 
+  geom_flow() +
+  geom_stratum(stat = "alluvium",
+               color = "darkgray") +
+  theme(legend.position = "right",   axis.line = element_blank(),panel.background=element_blank()) +
+  ggtitle("Frequency of cells in different conditions")
+
+
+
+Fig1C <- ggplot(df,
+                aes(x = sample, stratum = Cell_Type, alluvium = Cell_Type,
+                    y = Freq,
+                    fill = Cell_Type, label = Cell_Type)) +
+  scale_x_discrete(expand = c(.1, .1)) +
+  scale_fill_manual(values = c("#7FC97F", "#BEAED4", brewer.pal(4,'Oranges'), "#D95F02", "#7570B3",
+                               brewer.pal(5,'Blues'),"#E7298A","#1F78B4", "#B2DF8A",
+                               "#33A02C", "#FB9A99", "#E31A1C","#FFFF99", "grey" )) +
+  geom_flow() +
+  # 2. 将 'linewidth' 参数添加到 geom_stratum() 中
+  geom_stratum(stat = "alluvium",
+               color = "darkgray",
+               linewidth = 0.01) +
+  theme(legend.position = "right",
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        # 1. 旋转x轴标签
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  
+  # 新增此行以将图例设置为1列
+  guides(fill = guide_legend(ncol = 1)) +
+  ggtitle("Frequency of cells in different conditions")
+
+
+ggsave(filename = '../02.figures/Fig1/Fig1C.pdf',plot = Fig1C,width = 8,height = 8)
+Fig1C
+```
+
+
+# 4.Fig1D
+```{r fig.height=6.76, fig.width=10.8}
+
+show_geneExp <- function(id,
+                         SampleList = list(
+                                          Female = c("18dpi_F", "22dpi_F", "26dpi_F"),
+                                          Male = c("18dpi_M","22dpi_M","26dpi_M"))
+  ){
+  Plist <- imap(SampleList,~ {
+    simFP(id = id,seob = subset(seob,subset = sample %in% .x),
+          split.by = "sample",
+          pt.size = 0.05,cols = c("grey", "red"),
+          min.cutoff = 'q10',max.cutoff = 'q90') &
+      theme(panel.border = element_rect(fill = NA,linewidth = 1,colour = 'black'),
+            plot.title = element_text(face = "italic")
+      ) 
+  })
+  Plist$Female/Plist$Male
+  
+}
+
+Fig1D_a <- show_geneExp(id = "Sjc-0009220")
+ggsave(filename = "../02.figures/Fig1/Fig1D_a.pdf",plot = Fig1D_a,
+       width = 10.8,height = 3.38*2)
+
+Fig1D_b <- show_geneExp(id = "Sjc-0001267")
+ggsave(filename = "../02.figures/Fig1/Fig1D_b.pdf",plot = Fig1D_b,
+       width = 10.8,height = 3.38*2)
+Fig1D_a
+Fig1D_b
+```
+
+
+Tables
+```{r fig.height=6.4, fig.width=6.88}
+TableS2 <- seob_CellProp %>% 
+  column_to_rownames(var = "Cell_type") %>% 
+  round(2) %>% 
+  rownames_to_column(var = "Cell Type") %>% 
+  ggtexttable(rows = NULL,
+              theme = ttheme("blank")) %>%
+  tab_add_hline(at.row = 1:2, row.side = "top", linewidth = 3, linetype = 1) %>% 
+  tab_add_hline(at.row = nrow(seob_CellProp) + 1, row.side = "bottom", linewidth = 3, linetype = 1)
+
+
+writexl::write_xlsx(seob_CellProp %>% 
+  column_to_rownames(var = "Cell_type") %>% 
+  round(2) %>% 
+  rownames_to_column(var = "Cell Type"),"../02.figures/Tables/TableS2.xlsx")
+
+ggsave(filename = '../02.figures/Tables/TableS2.pdf',plot = TableS2,width = 6.88,height = 6.4)
+
+```
+
+
+```{r}
+BroadCellMarker_cosg <- COSG::cosg(seob,assay = 'RNA',groups = "all",n_genes_user = 100)
+writexl::write_xlsx(BroadCellMarker_cosg$names,"02.figures/Tables/BroadCellMarker_cosg_sjv3_n100.xlsx")
+
+
+seob.markers.Broad <- readRDS('~/Projects/SingleCell_Sja2024/01.rds_files/seob_marker_BroadCellType.rds')
+seob.markers.cls <- readRDS('~/Projects/SingleCell_Sja2024/01.rds_files/seob_marker_fineCls.rds')
+
+
+writexl::write_xlsx(split(seob.markers.Broad,seob.markers.Broad$cluster),
+                    "../03.tables/BroadCellMarker_sjv3_seurat.xlsx")
+
+writexl::write_xlsx(split(seob.markers.cls,seob.markers.cls$cluster),
+                    "../03.tables/clsCellMarker_sjv3_seurat.xlsx")
+```
+
+
+
+```{r}
+suppressPackageStartupMessages({
+  library(scCustomize)
+  library(patchwork)
+  library(reshape2)
+  library(networkD3)
+  library(dplyr)
+  library(magrittr)
+})
+
+```
+
+```{r}
+id2name <- read.delim("/home/shycheng/genome/Schitosoma_jp/Schistosoma_japonicum/SJ_GODB/sj_geneInfo_raw.tsv",sep = '\t',header = F)
+colnames(id2name) <- c("id","Gene_Name","Note")
+rownames(id2name) <- id2name$id
+id2name$Gene_Name <- as.character(id2name$Gene_Name)
+idx <- which(nchar(as.character(id2name$Gene_Name)) > 13)
+id2name$Gene_Name[idx] <- as.character(rownames(id2name[idx,]))
+id2name$Note <- gsub("\\(.*\\)","",id2name$Note)
+id2name$id <- gsub('_','-',id2name$id)
+rownames(id2name) <- id2name$id
+ID2NAME <- id2name
+rownames(ID2NAME) <- gsub('_','-',rownames(id2name))
+```
+
+
+Pre-processing
+```{r }
+cellinfo <- seob@meta.data
+
+aa <- cellinfo %>% 
+  dplyr::arrange(Cell_Type,seurat_clusters)
+
+
+old_cls <- as.character(unique(aa$seurat_clusters ))
+new_cls <- 1:75
+names(new_cls) <- old_cls
+
+
+
+seob@meta.data$label_cls <- as.numeric(new_cls[as.character(seob@meta.data$seurat_clusters)])
+
+
+seob@meta.data[nongut_cells,"label_cls"] <- 76
+
+seob@meta.data$label_cls <- factor(seob@meta.data$label_cls,levels = unique(seob@meta.data$label_cls))
+# csog marker
+Idents(seob) <- seob@meta.data$label_cls
+
+
+cls_CellMarker_cosg <- COSG::cosg(seob,assay = 'RNA',groups = "all",n_genes_user = 100)
+
+
+cls_markers <- sapply(cls_CellMarker_cosg$names,function(x){
+  x_1 <- x[!grepl("^ND|^C|^ATP",x)]
+  df <- na.omit(ID2NAME[x_1,])
+  g_id <- df %>% 
+    filter(!(grepl("^Sjc|^SJC",Gene_Name))) %>% 
+    head(1) %>% 
+    .$Gene_Name
+  toupper(g_id)
+})
+
+
+cls_markersID <- sapply(cls_CellMarker_cosg$names,function(x){
+  x_1 <- x[!grepl("^ND|^C|^ATP",x)]
+  df <- na.omit(ID2NAME[x_1,])
+  g_id <- df %>% 
+    filter(!(grepl("^Sjc|^SJC",Gene_Name))) %>% 
+    head(4) %>% 
+    .$id   
+  toupper(g_id)
+})
+
+
+
+
+
+seob@meta.data <- seob@meta.data %>% 
+  mutate(
+    cls = paste0("C", label_cls,"-",cls_markers[as.character(label_cls)]),
+    newcls = paste0("C",sprintf("%02d", label_cls),"-",cls_markers[as.character(label_cls)],"+")
+  )
+
+```
+
+
+```{r fig.height=12, fig.width=20}
+
+filter_cls_CellMarker_cosg <- cls_CellMarker_cosg$names %>% 
+  stack() %>% 
+  distinct(values,.keep_all = T)
+
+filter_cls_CellMarker_cosg <- filter_cls_CellMarker_cosg[!grepl("^ND|^C|^ATP",filter_cls_CellMarker_cosg$values),] %>% 
+  tibble::rownames_to_column() %>% 
+  group_by(ind) %>% 
+  top_n(wt = rowname, n = -1)
+
+
+markerIDs <- filter_cls_CellMarker_cosg$values
+markerIDs[which(levels(Idents(seob)) == 7)] <- "Sjc-0002426"
+markerIDs[which(levels(Idents(seob)) == 5)] <- "Sjc-0004199"
+markerIDs[which(levels(Idents(seob)) == 31)] <- "Sjc-0001127"
+markerIDs[which(levels(Idents(seob)) == 1)] <- "Sjc-0001789"
+markerIDs[which(levels(Idents(seob)) == 66)] <- "Sjc-0004743"
+markerIDs[which(levels(Idents(seob)) == 21)] <- "Sjc-0008405"
+markerIDs[which(levels(Idents(seob)) == 37)] <- "Sjc-0003379"
+markerIDs[which(levels(Idents(seob)) == 29)] <- "Sjc-0004639"
+markerIDs[which(levels(Idents(seob)) == 2)] <- "Sjc-0008087"
+markerIDs[which(levels(Idents(seob)) == 58)] <- "Sjc-0005854"
+markerIDs[which(levels(Idents(seob)) == 13)] <- "Sjc-0005571"
+markerIDs[which(levels(Idents(seob)) == 50)] <- "Sjc-0005818"
+markerIDs[which(levels(Idents(seob)) == 30)] <- "Sjc-0005750"
+markerIDs[which(levels(Idents(seob)) == 44)] <- "Sjc-0002912"
+markerIDs[which(levels(Idents(seob)) == 27)] <- "Sjc-0002165"
+markerIDs[which(levels(Idents(seob)) == 41)] <- "Sjc-0008787"
+markerIDs[which(levels(Idents(seob)) == 3)] <- "Sjc-0007364"
+markerIDs[which(levels(Idents(seob)) == 11)] <- "Sjc-0007479"
+markerIDs[which(levels(Idents(seob)) == 61)] <- "Sjc-0005728"
+markerIDs[which(levels(Idents(seob)) == 43)] <- "Sjc-0008753"
+markerIDs[which(levels(Idents(seob)) == 51)] <- "Sjc-0008390"
+markerIDs[which(levels(Idents(seob)) == 57)] <- "Sjc-0004460"
+markerIDs[which(levels(Idents(seob)) == 48)] <- "Sjc-0003345"
+markerIDs[which(levels(Idents(seob)) == 55)] <- "Sjc-0008722"
+markerIDs[which(levels(Idents(seob)) == 12)] <- "Sjc-0005761"#"Sjc-0009271"
+markerIDs[which(levels(Idents(seob)) == 54)] <- "Sjc-0003449"
+markerIDs[which(levels(Idents(seob)) == 4)] <- "Sjc-0001581"
+markerIDs[which(levels(Idents(seob)) == 33)] <- "Sjc-0000815"
+markerIDs[which(levels(Idents(seob)) == 45)] <- "Sjc-0003528"
+markerIDs[which(levels(Idents(seob)) == 36)] <- "Sjc-0008778"
+markerIDs[which(levels(Idents(seob)) == 62)] <- "Sjc-0008126"
+markerIDs[which(levels(Idents(seob)) == 16)] <- "Sjc-0009220"
+markerIDs[which(levels(Idents(seob)) == 35)] <- "Sjc-0003404"
+markerIDs[which(levels(Idents(seob)) == 73)] <- "Sjc-0008351"
+
+markTab <- data.frame(
+  cluster = as.numeric(levels(seob@meta.data$label_cls)),
+  cls = paste0("C",sprintf("%02d",as.numeric(levels(seob@meta.data$label_cls)))),
+  ID = markerIDs
+)
+
+write.csv(markTab,"../03.tables/markTab.csv")
+
+saveRDS(markTab,"../01.rds_files/markTab.rds")
+saveRDS(markerIDs,"../01.rds_files/markerIDs.rds")
+
+raw_markTab <- data.frame(
+ 
+  cls = paste0("C",sprintf("%02d",as.numeric(levels(seob@meta.data$label_cls)))),
+  ID = filter_cls_CellMarker_cosg$values
+)
+
+Idents(seob) <- factor(seob@meta.data$newcls,levels = unique(sort(seob@meta.data$newcls)))
+# DotPlot(seob,features = dplyr::arrange(raw_markTab,raw_markTab$cls)$ID ) + RotatedAxis()
+
+```
+
+
+```{r}
+markTab$genename <- ID2NAME[markTab$ID,"Gene_Name"]
+rownames(markTab) <- markTab$cluster
+
+seob@meta.data <- seob@meta.data %>% 
+  mutate(
+    newcls = paste0("C",sprintf("%02d",as.numeric(as.character(label_cls))),"-",markTab[as.character(label_cls),"genename"],"+")
+  )
+```
+
+
+
+Not run -- It will take long time to run FindAllMarkers
+```{r}
+Idents(seob) <- seob@meta.data$Cell_Type
+seob.markers <- FindAllMarkers(seob,only.pos = T, min.pct = 0.25, logfc.threshold = 0.25)
+saveRDS(object = seob.markers,'/home/R/Projects/scRNA-seq/data/seob_marker_BroadCellType.rds')
+
+
+Idents(seob) <- seob@meta.data$cls
+seob.markers.cls <- FindAllMarkers(seob,only.pos = T, min.pct = 0.25, logfc.threshold = 0.25)
+saveRDS(object = seob.markers.cls,'../data/seob_marker_fineCls.rds')
+
+```
+
+
+
+```{r}
+seob.markers <- readRDS("../01.rds_files/seob_marker_fineCls.rds")
+
+seob.markers$Note <- ID2NAME[seob.markers$gene,'Note']
+seob.markers$GeneName <- ID2NAME[seob.markers$gene,'Gene_Name']
+
+pre_MarkerGenes <- seob.markers %>% 
+  filter(!(grepl("^ND|^C|^ATP",gene))) %>%
+  filter(!(grepl("^Sjc",GeneName))) %>% 
+  group_by(cluster) %>% 
+  top_n(n = -100, wt = p_val_adj) %>% 
+  ungroup() %>% 
+  distinct(gene,.keep_all = T) %>%
+  group_by(cluster) %>% 
+  top_n(n = 1, wt = avg_log2FC )
+
+pre_MarkerGenes <- as.data.frame(pre_MarkerGenes)
+rownames(pre_MarkerGenes) <- pre_MarkerGenes$cluster
+
+markGs <- pre_MarkerGenes$GeneName
+names(markGs) <- pre_MarkerGenes$cluster
+
+
+seob@meta.data <- seob@meta.data %>% 
+  mutate(
+    wilcox_cls = paste0("C", label_cls,"-",markGs[as.character(cls)]),
+    #newcls = paste0(sprintf("%02d", label_cls),"-",cls_markers[as.character(label_cls)])
+  )
+
+# write.csv(seob@meta.data,file = "../03.tables/cell_info.csv")
+```
+
+
+
+
+# 5.FigS1A
+
+
+```{r fig.height=6.88*1.2, fig.width=7.2*1.2}
+
+seob@meta.data$label_cls <- as.numeric(as.character(seob@meta.data$label_cls))
+
+umap_cls <- DimPlot(seob,group.by = "label_cls" ,#'label_cls',
+                    raster = F,
+                    label = T,label.size = 3,
+                    repel = T) + 
+  scale_color_manual(values = c(col_vector,"#A50F15","grey")) + NoLegend() + 
+  theme(panel.border = element_rect(fill = NA,linewidth = 1,colour = 'black')) + 
+  ggtitle(label = "UMAP of 104671 cells(color by clusters)")
+
+# ggsave("../02.figures/FigS1/FigS1A.pdf",width = 7.2,height = 6.88,plot = umap_cls)
+
+umap_cls
+```
+
+
+# 6.FigS1B
+
+```{r}
+
+cls2cell <- seob@meta.data[,c('newcls','Cell_Type')]
+
+cls2cell <- seob@meta.data %>% arrange(Cell_Type,newcls) %>% 
+  distinct(newcls,.keep_all = T) %>% 
+  select(Cell_Type,newcls) %>% 
+  mutate(value = 1)
+
+
+links <- cls2cell[,c('newcls','Cell_Type','value')]
+colnames(links) <- c("source", "target", "value")
+
+node <- unique(c(as.character(links$source),as.character(links$target)))
+node_df <- data.frame(node = 0:(length(node) -1 ),name = node)
+
+links <- merge(x = links,y = node_df,by.x = "source", by.y = "name")
+links<- merge(links,node_df,by.x = "target", by.y = "name")
+links <- links[ , c("node.x", "node.y", "value")]
+colnames(links) <- c("source", "target", "value")
+
+node_df$color <- c(c(col_vector,"#A50F15","grey" ),c("#7FC97F", "#BEAED4", brewer.pal(4,'Oranges'), "#D95F02", "#7570B3",
+                                             brewer.pal(5,'Blues'),"#E7298A","#1F78B4", "#B2DF8A",
+                                             "#33A02C", "#FB9A99", "#E31A1C", "#A50F15","grey" )
+                   #c(col_vector,"#A50F15")
+)
+
+node_df$group <- paste0("r",1:nrow(node_df))
+colour_scale <- sprintf("d3.scaleOrdinal().domain(%s).range(%s)",
+                        jsonlite::toJSON(node_df$group),
+                        jsonlite::toJSON(node_df$color))
+
+network_sankey <- networkD3::sankeyNetwork(Links = links, 
+                                           Nodes = node_df, 
+                                           Source = 'source',
+                                           Target = 'target', 
+                                           Value = 'value', 
+                                           NodeID = 'name',
+                                           units = 'value', 
+                                           sinksRight = F, 
+                                           NodeGroup = 'group',
+                                           fontSize = 12,
+                                           fontFamily = "Times new roman",
+                                           colourScale = colour_scale,
+                                           height = 1800,
+                                           width = 550)
+
+htmlwidgets::saveWidget(network_sankey, file=file.path("../02.figures/FigS1/FigS1B.html"))
+
+webshot::webshot(url="../02.figures/FigS1/FigS1B.html",
+                 file=file.path("../02.figures/FigS1/FigS1B.pdf"))
+
+network_sankey
+```
+
+
+
+# 7.FigS2
+```{r fig.height=5, fig.width=13.6}
+ids <- c(
+  "Sjc-0008087","Sjc-0001581",# old
+  "Sjc-0000705","Sjc-0006622","Sjc-0009220","Sjc-0004774","Sjc-0008219",
+  "Sjc-0003010","Sjc-0008393","Sjc-0009231","Sjc-0007561","Sjc-0008047","Sjc-0006712",
+  "Sjc-0005931","Sjc-0007590","Sjc-0003404","Sjc-0004182","Sjc-0001267","Sjc-0008945",
+  "Sjc-0002936","Sjc-0005717","Sjc-0002588",
+  "Sjc-0000576","Sjc-0001087","Sjc-0000004", # old
+  "Sjc-0000414","Sjc-0002985","Sjc-0008478","Sjc-0000277","Sjc-0000124","Sjc-0000920",
+  "Sjc-0009480","Sjc-0008416","Sjc-0007782","Sjc-0000095",
+  "Sjc-0000530","Sjc-0001895",
+  "Sjc-0000045",
+  "Sjc-0008397","Sjc-0008351","Sjc-0003576",
+  "Sjc-0001566","Sjc-0001890",
+  "Sjc-0001771"
+  
+  )
+
+DefaultAssay(seob) <- "integrated"
+dp <- DotPlot(seob, 
+                              features =ids,group.by = "Cell_Type",
+                              cols = c('lightgrey','#990000')) +
+  theme(axis.text = element_text(size = 12,hjust = 1),
+        panel.border = element_rect(fill = NA,linewidth = 1,colour = 'black')
+        )+ 
+ RotatedAxis() + 
+  xlab("")
+
+ggsave("../02.figures/FigS2.pdf",width = 13.6,height = 5,plot = dp)
+dp
+```
+
+
+# 8.FigS3
+```{r fig.height=4, fig.width=4.5}
+
+ids <- c("Sjc-0003010","Sjc-0008393","Sjc-0009231","Sjc-0007561","Sjc-0005931","Sjc-0007590",
+         "Sjc-0008047","Sjc-0006712","Sjc-0005717","Sjc-0002588","Sjc-0009480","Sjc-0008416",
+         "Sjc-0007782","Sjc-0000095","Sjc-0002936","Sjc-0000530","Sjc-0000045","Sjc-0001890",
+         "Sjc-0003576","Sjc-0000176","Sjc-0002985","Sjc-0008478","Sjc-0000277","Sjc-0000124",
+         "Sjc-0000920","Sjc-0001566")
+
+#ids <- c("Sjc-0003576","Sjc-0000045")
+lapply(ids, function(id){
+  message(sprintf("Plot id:%s",id))
+  p <- FeaturePlot(seob,
+            features = id,label = F,
+            pt.size = 0.01,
+            raster = F,min.cutoff = 'q10',max.cutoff = 'q90',cols = c("grey",'#E31A1C'))  + # lightgrey
+  labs(x = "UMAP-1",y = "UMAP-2",title = "") + 
+  theme(axis.text = element_blank(),axis.ticks = element_blank(),panel.background = element_rect(fill = NA,linewidth = 1,colour = 'black'))
+  
+ggsave(sprintf("../02.figures/FigS3/%s.pdf",id),width = 4.5*1.2,height = 4*1.2,plot = p)
+})
+
+```
+
+
+
+
+# 9.FigS4
+
+```{r fig.height=4, fig.width=3.68}
+cells_bysampleList <- split(rownames(seob@meta.data),seob@meta.data$sample)
+
+FigS4_a <- scCustomize::Cell_Highlight_Plot(seob,pt.size = 0.01,
+                                                    cells_highlight = cells_bysampleList[1],
+                                                    highlight_color = col_vector[1]) + 
+  theme_pubr(border = T) & NoAxes()
+
+ggsave(filename = "../02.figures/FigS4/FigS4_a.pdf",width = 3.68,height = 4,plot = FigS4_a)
+FigS4_a
+```
+
+
+```{r fig.height=8, fig.width=11}
+FigS4_b <- map(c(2,4,6,3,5,7),function(x){
+  p <- scCustomize::Cell_Highlight_Plot(seob,pt.size = 0.01,
+                                        #raster = T,
+                                        cells_highlight = cells_bysampleList[x],
+                                        highlight_color = col_vector[x]) + 
+    theme_pubr(border = T) & NoAxes()
+  p
+}) %>% patchwork::wrap_plots(ncol = 3)
+
+
+ggsave(filename = "../02.figures/FigS4/FigS4_b.png",width = 11,height = 8,plot = FigS4_b)
+FigS4_b
+```
+
+
+```{r fig.height=11.5, fig.width=15}
+
+FigS4_c <- DimPlot(seob, raster = F,
+                           reduction = "umap",
+                           group.by  = "sample",repel = T,pt.size = 0.01,
+                           label.size = 3,
+                           label = F) + 
+  scale_color_manual(values = col_vector) + 
+  theme_pubr(border = T,legend = 'right') & NoAxes()
+
+
+ggsave(filename = "../02.figures/FigS4/FigS1C_c.png",width = 4.9*3,height = 3.8*3,plot = FigS4_c)
+FigS4_c
+```
+
+
+# 10.FigS5
+```{r fig.height=4, fig.width=6}
+
+barplot_per <- function(seob,colValues = brewer.pal(7,'RdBu'),Cell_Type = "Cell_Type",
+                        levels = c('26dpi_F','22dpi_F','18dpi_F',"14dpi", 
+                                               '18dpi_M', '22dpi_M','26dpi_M')){
+  df = data.frame(cluster=seob@meta.data[[Cell_Type]], day=seob@meta.data[["orig.ident"]], seob@reductions$umap@cell.embeddings,Cell_type = seob@meta.data[[Cell_Type]])
+
+  bar_plot = function(df, position='stack') {
+    df_bar = with(df, table(cluster, day))
+    df_bar = as.data.frame(prop.table(df_bar,1) * 100) #%>%
+    df_bar$day <- factor(df_bar$day,levels = levels)
+    
+    p = ggplot(df_bar, aes(fill=day, y=Freq, x=cluster))
+    p = p + geom_bar(stat="identity", position=position,width = 0.8) + labs(fill='Day')
+    p = p + theme(panel.background=element_blank())+ scale_fill_manual(values = colValues) +
+      xlab('Clusters') +
+      ylab('Percentage(%)') +
+      ggtitle("Composition(%) of Clusters by Time") + 
+      theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = .5))
+    return (p)
+  }
+  bar_plot(df)
+}
+
+FigS5 <- barplot_per(seob,colValues = c(
+  "#B2182B", "#EF8A62", "#FDDBC7" ,"yellow", "#D1E5F0", "#67A9CF", "#2166AC"
+)) + xlab("")
+
+ggsave("../02.figures/FigS5.pdf",width = 6,height = 4,plot = FigS5)
+```
+
+
+
+
+

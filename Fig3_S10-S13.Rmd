@@ -1,0 +1,507 @@
+```{r}
+out_dir = "../02.figures/Fig4"
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir)
+}
+```
+
+
+# 1.pre-processing
+
+## 1.1 Dimension reduction
+Male neuron cells
+```{r}
+
+###################### Loading data ###############################################
+Male_seob_neuron <- readRDS('/home/shycheng/Projects/scRNA-seq/Trajectory_inference/Male_Neuron_seob_loom/Male_seob_neuron.rds')
+
+DefaultAssay(Male_seob_neuron) <- 'integrated'
+Male_seob_neuron@meta.data <- Male_seob_neuron@meta.data %>% 
+  mutate(reName = case_when(
+    Cell_Type == "Neural precursor cells" ~ "NPC-like",
+    Cell_Type == "Neuron stem cells" ~ "Neuron progenitor",
+    TRUE ~ Cell_Type
+  ))
+
+Male_seob_neuron@meta.data$Cell_Type <- Male_seob_neuron@meta.data$reName
+```
+
+
+```{r}
+save_filesFORscVelo(Male_seob_neuron,filename = "Male_seob_neuron",baseDIR = "../04.velocity/")
+```
+
+
+Previous code -- Not run
+```{r}
+# ------------------------------------------------------------------
+Male_seob_neuron <- subset(Male_seob,
+                           subset = Cell_Type  %in% c("Neural stem cells",
+                                                            "Neural precursor cell",
+                                                            "Nonciliated neuron","Ciliated neuron"))
+DefaultAssay(Male_seob_neuron) <- "integrated"
+## PCA
+Male_seob_neuron <- RunPCA(Male_seob_neuron,npcs = 30)
+
+## UMAP
+Male_seob_neuron <- RunUMAP(Male_seob_neuron, dims = 1:30)
+Male_seob_neuron <- FindNeighbors(Male_seob_neuron,dims = 1:30)
+Male_seob_neuron <- FindClusters(Male_seob_neuron,resolution = 1,random.seed = 1)
+
+```
+
+
+Female neuron cells
+```{r}
+Female_seob_neuron <- readRDS('/home/shycheng/Projects/scRNA-seq/Trajectory_inference/Female_seob_neuron_loom/Female_seob_neuron.rds')
+
+Female_seob_neuron@meta.data$Cell_Type <- Neuron.combined@meta.data[colnames(Female_seob_neuron),"Cell_Type"]
+
+```
+
+
+Previous code -- Not run
+```{r}
+Female_seob_neuron <- subset(Female_seob,subset = Cell_Type %in% c("Neural precursor cell",
+                                                                   "Neural stem cells",
+                                                                   "Ciliated neuron",
+                                                                   "Nonciliated neuron"))
+
+## PCA
+Female_seob_neuron <- RunPCA(Female_seob_neuron,npcs = 20)
+## t-SNE
+#Male_seob <- RunTSNE(Male_seob, dims = 1:30)
+## UMAP
+Female_seob_neuron <- RunUMAP(      Female_seob_neuron, dims = 1:20)
+Female_seob_neuron <- FindNeighbors(Female_seob_neuron,dims = 1:20)
+
+Female_seob_neuron <- FindClusters( Female_seob_neuron,resolution = 1,random.seed = 1)
+
+```
+
+
+```{r}
+
+save_filesFORscVelo(Female_seob_neuron,filename = "Female_seob_neuron",baseDIR = "../04.velocity/")
+
+saveRDS(Female_seob_neuron,"../01.rds_files/Female_seob_neuron.rds")
+
+write.csv(Female_seob_neuron@reductions$umap@cell.embeddings,"../04.velocity/Female_seob_neuron_loom/Female_seob_neuron.umap.csv")
+
+Female_seob_neuron@meta.data$barcode <-  rownames(Female_seob_neuron@meta.data)
+write.csv(Female_seob_neuron@meta.data[,c('barcode','seurat_clusters',"Cell_Type")],"../04.velocity/Female_seob_neuron_loom/Female_seob_neuron.celltype.csv")
+
+```
+
+
+
+Neuron combined
+```{r }
+library(dplyr)
+Neuron.combined <- readRDS(file = '~/Projects/scRNA-seq/data/Neuron_seob.rds')
+
+Neuron.combined@meta.data <- Neuron.combined@meta.data %>% 
+  mutate(Cell_Type = case_when(
+    seurat_clusters %in% c(0,1,8,23,25) ~ 'Neuron progenitor',
+    seurat_clusters %in% c(3,12) ~ 'NPC-like',
+    seurat_clusters %in% c(16,22,27,38,28) ~ 'Pre.alpha',
+    seurat_clusters %in% c(9) ~ 'alpha-1 Neuron',
+    seurat_clusters %in% c(31,32,40,34,36,18,35,39,26) ~ 'alpha-2 Neuron',
+    seurat_clusters %in% c(10) ~ 'Pre.beta',
+    seurat_clusters %in% c(14) ~ 'beta-1 Neuron',
+    seurat_clusters %in% c(33) ~ 'beta-2 Neuron',
+    seurat_clusters %in% c(7,30) ~ 'Pre.gamma',
+    seurat_clusters %in% c(5) ~ 'gamma-1 Neuron',
+    seurat_clusters %in% c(37) ~ 'gamma-2 Neuron',
+    seurat_clusters %in% c(2,19) ~ 'Pre.delta',
+    seurat_clusters %in% c(6) ~ 'delta-1 Neuron',
+    seurat_clusters %in% c(4) ~ 'delta-2 Neuron',
+    seurat_clusters %in% c(21) ~ 'delta-3 Neuron',
+    seurat_clusters %in% c(13,17) ~ 'delta-4 Neuron',
+    seurat_clusters %in% c(15,11) ~ 'Pre.delta-1/2/3',
+    seurat_clusters %in% c(41,20,24) ~ 'Pre.delta-4',
+    seurat_clusters %in% c(29,38) ~ 'epsilon Neuron',
+  ))
+Neuron.combined@meta.data$Cell_Type <- factor(as.character(Neuron.combined@meta.data$Cell_Type),
+                                               levels = c('Neuron progenitor',  'NPC-like','Pre.alpha','Pre.beta',
+                                                          'Pre.gamma','Pre.delta','Pre.delta-1/2/3','Pre.delta-4', 'alpha-1 Neuron', 'alpha-2 Neuron',
+                                                          'beta-1 Neuron','beta-2 Neuron','gamma-1 Neuron','gamma-2 Neuron','delta-1 Neuron','delta-2 Neuron','delta-3 Neuron','delta-4 Neuron','epsilon Neuron') 
+)
+
+```
+
+
+Previous code -- Not run
+```{r}
+
+DefaultAssay(Female_seob_neuron) <- 'RNA'
+DefaultAssay(Male_seob_neuron) <- 'RNA'
+Female_seob_neuron.list <- SplitObject(Female_seob_neuron,split.by = 'sample')
+Male_seob_neuron.list <- SplitObject(Male_seob_neuron,split.by = 'sample')
+
+Neuron.seob.list <- unlist(c(Female_seob_neuron.list,
+                             Male_seob_neuron.list))
+
+Neuron.seob.list <- lapply(X = Neuron.seob.list, FUN = function(x) {
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 3000)
+})
+
+features <- SelectIntegrationFeatures(object.list = Neuron.seob.list,nfeatures = 3000)
+Neuron.anchors <- FindIntegrationAnchors(object.list = Neuron.seob.list, anchor.features = features)
+Neuron.combined <- IntegrateData(anchorset = Neuron.anchors)
+
+# Run the standard workflow for visualization and clustering
+Neuron.combined <- ScaleData(Neuron.combined, verbose = FALSE)
+Neuron.combined <- RunPCA(Neuron.combined,npcs = 30)
+Neuron.combined <- RunUMAP(Neuron.combined, dims = 1:30)
+Neuron.combined <- RunTSNE(Neuron.combined, dims = 1:30)
+Neuron.combined <- FindNeighbors(Neuron.combined,dims = 1:30)
+Neuron.combined <- FindClusters(Neuron.combined,resolution = 1,random.seed = 1)
+
+#saveRDS(Neuron.combined,file = '../data/Neuron_seob.rds')
+sceasy::convertFormat(Neuron.combined,from = "seurat",to = 'anndata',outFile = "../01.rds_files/Neuron.combined.h5ad")
+```
+
+
+
+
+## 1.2 Trajectory inference using Slingshot
+
+```{r}
+# Male
+sub_Male_seob_neuron <- Male_seob_neuron#subset(Male_seob_neuron,subset = Cell_Type %in% c('NPC-like'),invert = T )
+#sub_male_neuron_sce <- readRDS(file = '../Trajectory_inference/Male_Neuron_seob_loom/Male_neuron_slingshot_RNAseob.rds')
+
+sub_Male_seob_neuron@meta.data <- sub_Male_seob_neuron@meta.data %>% 
+  mutate(ClusterLabel = case_when(
+    Cell_Type %in% c('gamma-1 Neuron','gamma-2 Neuron') ~ 'gamma Neuron',
+    TRUE ~ as.character(Cell_Type)
+  ))
+
+sce_sub_male_neuron <- as.SingleCellExperiment(sub_Male_seob_neuron,assay = 'RNA')
+
+sce_sub_male_neuron <- slingshot(
+  sce_sub_male_neuron,
+  reducedDim = 'UMAP',
+  clusterLabels = 'ClusterLabel',
+  start.clus = "Neuron progenitor",thresh = 0.05
+)
+
+
+# Female
+sub_Female_seob_neuron <- Female_seob_neuron# subset(Female_seob_neuron,subset = Cell_Type %in% c("delta-3 Neuron","beta-2 Neuron",'gamma-2 Neuron'),invert = T )
+#sub_male_neuron_sce <- readRDS(file = '../Trajectory_inference/Male_Neuron_seob_loom/Male_neuron_slingshot_RNAseob.rds')
+
+sub_Female_seob_neuron@meta.data <- sub_Female_seob_neuron@meta.data %>% 
+  mutate(ClusterLabel = case_when(
+    Cell_Type %in% c('gamma-1 Neuron') ~ 'gamma Neuron',
+    TRUE ~ as.character(Cell_Type)
+  ))
+
+sce_sub_female_neuron <- as.SingleCellExperiment(sub_Female_seob_neuron,assay = 'RNA')
+
+sce_sub_female_neuron <- slingshot(
+  sce_sub_female_neuron,
+  reducedDim = 'UMAP',
+  clusterLabels = 'ClusterLabel',
+  start.clus = "Neuron progenitor",thresh = 0.05,stretch = 0.2) # ,stretch = 0.01, shrink = 1
+
+```
+
+
+# 2.Fig3A
+```{r fig.height=3, fig.width=6}
+library(ggh4x)
+library(ggunchull)
+
+Neuron.combined@meta.data$select_cells <- as.character(Neuron.combined@meta.data$Cell_Type)
+
+Neuron.combined@meta.data$select_cells[!Neuron.combined@meta.data$select_cells %in% c("delta-3 Neuron", "gamma-2 Neuron","beta-2 Neuron")] <- "others"  # "alpha-1 Neuron","alpha-2 Neuron"
+
+Neuron.combined$select_cells <- as.character(Neuron.combined$select_cells)
+
+p  <- scRNAtoolVis::clusterCornerAxes(subset(Neuron.combined,subset = Cell_Type %in% c("delta-3 Neuron", "gamma-2 Neuron","beta-2 Neuron")),
+                                          reduction = 'umap',
+                                          clusterCol = "select_cells",
+                                          pSize = 0.05,
+                                          groupFacet = "Sex",noSplit = F,
+                                          cellLabel = T,addCircle = F,relDist = -0.1,
+                                          cellLabelSize = 6,cornerTextSize = 0,show.legend = F) + 
+  
+  scale_color_manual(values = c(col_vectors[c(12,17,14)], scales::alpha("grey", alpha = 1)))  + 
+    ylim(c(-3,10)) +
+    facet_wrap2(~Sex, ncol = 2,strip = strip_themed(background_x = ggh4x::elem_list_rect(fill = c(scales::alpha("red3",alpha = 0.3),scales::alpha("blue4",alpha = 0.3))),
+                                                    #text_x = element_text(angle = -90, hjust = 0)
+                                                    ),strip.position = 'top')
+
+
+
+ Fig3A <- p +   theme(panel.border = element_rect(fill = NA, color = 'black', linewidth = 1),
+        strip.text.x = element_text(size = 12,face = 'bold'),
+        ) +
+  ggunchull::stat_unchull(data=subset(p$data, select_cells !="others"),
+                          ggplot2::aes_string(fill = "select_cells"),show.legend = F,
+               alpha = 0.1, lty = "dashed",nbin = 150,nsm = 10,qval = 1,color = 'black',
+               size = 0.5)
+
+Fig3A
+#ggsave("../02.figures/Fig3A.pdf",width = 10,height = 5,plot = Fig3A)
+```
+
+
+
+
+
+
+# 3.Fig3E
+```{r fig.height=4, fig.width=12}
+DefaultAssay(Neuron.combined) <- 'RNA'
+Fig3E <- multi_simFP(ids = c("Sjc-0000814","Sjc-0006754","Sjc-0000373"),Neuron.combined,min.cutoff = 'q1',max.cutoff = 'q99')
+
+ggsave(filename = "../02.figures/Fig3E.pdf",width = 12,height = 4,plot = Fig3E)
+Fig3E
+```
+
+
+
+
+# 4.FigS10A
+```{r fig.height=6, fig.width=8}
+
+Male_seob_neuron@meta.data$reName <- factor(as.character(Male_seob_neuron@meta.data$reName),
+                                               levels = c('Neuron progenitor',  'NPC-like','Pre.alpha','Pre.beta',
+                                                          'Pre.gamma','Pre.delta','Pre.delta-1/2/3','Pre.delta-4', 'alpha-1 Neuron', 'alpha-2 Neuron',
+                                                          'beta-1 Neuron','beta-2 Neuron','gamma-1 Neuron','gamma-2 Neuron','delta-1 Neuron','delta-2 Neuron','delta-3 Neuron','delta-4 Neuron','epsilon Neuron') 
+)
+
+
+FigS10A <- DimPlot(Male_seob_neuron, 
+                                 reduction = "umap", # pca, umap, tsne
+                                 group.by  = "reName",
+                                 repel = T,
+                                 #group.by  = "seurat_clusters",
+                                 #split.by = 'sample',label.size = 4,
+                                 label = T) + 
+  scale_color_manual(values = col_vectors[1:length(unique(Male_seob_neuron@meta.data$reName))]) + 
+  theme(panel.border = element_rect(fill = NULL,linewidth = 1,colour = 'black')) + 
+  ggtitle(label = "UMAP of Neuron cells(male)")
+
+ggsave("../02.figures/FigS10A.pdf",width = 8,height = 6,plot = FigS10A)
+FigS10A
+```
+
+# 5.FigS10B
+
+```{r fig.height=6, fig.width=8}
+# extract info about pseudotimes from sce
+sds_male_neuron <- SlingshotDataSet(sce_sub_male_neuron)
+FigS10B <- plot_slingshot(sds_male_neuron) + theme_pubr(legend = "right",border = T)
+
+ggsave("../02.figures/FigS10B.pdf",width = 8,height = 6,plot = FigS10B)
+FigS10B
+
+```
+
+
+
+# 6.FigS11A
+
+```{r fig.height=6, fig.width=8}
+
+
+FigS11A <- DimPlot(Female_seob_neuron, 
+                                 reduction = "umap", # pca, umap, tsne
+                                 group.by  = "Cell_Type",
+                                 repel = T,
+                                 #group.by  = "seurat_clusters",
+                                 #split.by = 'sample',label.size = 4,
+                                 label = T) + 
+  scale_color_manual(values = col_vectors[1:length(unique(Female_seob_neuron@meta.data$Cell_Type))]) + 
+  theme(panel.border = element_rect(fill = NULL,linewidth = 1,colour = 'black')) + 
+  ggtitle(label = "UMAP of Neuron cells(female)")
+  
+ggsave("../02.figures/FigS11A.pdf",width = 8,height = 6,plot = FigS11A)
+FigS11A
+```
+
+
+# 7.FigS11B
+
+```{r fig.height=6, fig.width=8}
+sds_female_neuron <- SlingshotDataSet(sce_sub_female_neuron)
+sds = sds_female_neuron
+test <- data.frame(reducedDims(sds))
+pdt_agg1 = apply(slingPseudotime(sds)[,c(1:length(sds@lineages))],1,function(t) mean(t, na.rm=T))
+
+test$pseudotime <- pdt_agg1
+p <- ggscatter(test,x= 'UMAP_1',y = 'UMAP_2',color = 'pseudotime',size = 0.8) + 
+  gradient_color(palette = rev(brewer.pal(11,'Spectral')[-6])) +
+  theme_pubr(border = T)
+
+curves <- slingCurves(sds, as.df = TRUE)
+
+curves <- curves[!curves$Lineage %in% c(2,3),]
+arrow_style <- arrow(type = "closed", length = unit(0.1, "inches"))
+
+p <- p + geom_path(data = curves %>% arrange(Order),
+              aes(group = Lineage),show.legend = T,arrow = arrow_style) 
+FigS11B <- p + theme_pubr(legend = "right",border = T)
+
+ggsave("../02.figures/FigS11B.pdf",width = 8,height = 6,plot = FigS11B)
+
+FigS11B
+```
+
+
+# 8.FigS10CDE/S11CD
+```{r}
+# "../00.scripts/jupyter/FigS6_S7_S8.ipynb"
+```
+
+
+# 9.FigS12A
+```{r fig.height=6, fig.width=12.8}
+FigS12A <- DimPlot(Neuron.combined,split.by = 'Sex',group.by = 'Cell_Type',label = T,repel = T) +
+  scale_color_manual(values = col_vectors[1:length(unique(Neuron.combined@meta.data$Cell_Type))])+ theme_pubr(border = T,legend = 'right') + ggtitle(label = "UMAP of Neuron cells")
+ggsave(filename = "../02.figures/FigS12A.pdf",width = 12.8,height = 6,plot = FigS12A)
+FigS12A
+```
+
+
+# 10.FigS12B_1
+```{r fig.height=6, fig.width=8}
+library(reshape2)
+library(ggpubr)
+library(ggalluvial)
+
+Idents(Neuron.combined) <- Neuron.combined@meta.data$Cell_Type
+df <- Neuron.combined@meta.data %>% 
+  dplyr::select("sample","Cell_Type") %>% 
+  table() 
+df <-  as.data.frame(prop.table(df,1) * 100)
+df$sample <- factor(df$sample,levels = c('26dpi_F','22dpi_F','18dpi_F',
+                                         '18dpi_M', '22dpi_M','26dpi_M'))
+
+
+df$Sex <- if_else(grepl("F",df$sample),"Female","Male")
+
+FigS12B_1 <- map(split(df,df$Sex),function(d){
+  ggplot(d,
+             aes(x = sample, stratum = Cell_Type, alluvium = Cell_Type,
+                 y = Freq,
+                 fill = Cell_Type, label = Cell_Type)) +
+  scale_x_discrete(expand = c(.1, .1)) +
+  scale_fill_manual(values = col_vectors[1:length(unique(Neuron.combined@meta.data$Cell_Type))]) + 
+  geom_flow() +
+  geom_stratum(stat = "alluvium",
+               color = "darkgray") +
+  theme(legend.position = "right",   axis.line = element_blank(),panel.background=element_blank()) +
+  ggtitle("Frequency of cells in different conditions")
+}) %>% patchwork::wrap_plots(ncol = 2,guides = "collect")
+
+
+ggsave(filename = "../02.figures/FigS12B.pdf",width = 8,height = 6,plot = FigS12B_1)
+FigS12B_1
+```
+
+
+# 11.FigS12B_2
+```{r fig.height=5, fig.width=4.5}
+barplot_per <- function(seob,colValues = brewer.pal(7,'RdBu'),Cell_Type = "Cell_Type",rev = TRUE,
+                        levels = c('26dpi_F','22dpi_F','18dpi_F',"14dpi", 
+                                               '18dpi_M', '22dpi_M','26dpi_M')){
+  df = data.frame(cluster=seob@meta.data[[Cell_Type]], day=seob@meta.data[["orig.ident"]], seob@reductions$umap@cell.embeddings,Cell_type = seob@meta.data[[Cell_Type]])
+  if (rev) {
+    df$cluster <- factor(as.character(df$cluster),levels = rev(levels(df$cluster)))
+  }
+  bar_plot = function(df, position='stack') {
+    df_bar = with(df, table(cluster, day))
+    df_bar = as.data.frame(prop.table(df_bar,1) * 100) #%>%
+    df_bar$day <- factor(df_bar$day,levels = levels)
+    
+    p = ggplot(df_bar, aes(fill=day, y=Freq, x=cluster))
+    p = p + geom_bar(stat="identity", position=position,width = 0.8) + labs(fill='Day')
+    p = p + theme(panel.background=element_blank())+ scale_fill_manual(values = colValues) +
+      xlab('Clusters') +
+      ylab('Percentage(%)') +
+      ggtitle("Composition(%) of Clusters by Time") + 
+      theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = .5))
+    return (p)
+  }
+  bar_plot(df)
+}
+
+FigS12B_2 <- barplot_per(Neuron.combined,colValues = c(
+  "#B2182B", "#EF8A62", "#FDDBC7" , "#D1E5F0", "#67A9CF", "#2166AC"
+),levels = c('26dpi_F','22dpi_F','18dpi_F',
+                                         '18dpi_M', '22dpi_M','26dpi_M')) + xlab("") + coord_flip()
+
+ggsave("../02.figures/FigS12B_2.pdf",width = 4.5,height = 5,plot = FigS12B_2)
+FigS12B_2
+```
+
+# 12.FigS13
+
+```{r fig.height=5*1.1, fig.width=10.8*1.1}
+
+ids <- c("Sjc-0008047","Sjc-0001899",
+         "Sjc-0005862","Sjc-0003224",
+         "Sjc-0000414","Sjc-0002096",
+         "Sjc-0004026","Sjc-0004639",
+         "Sjc-0001159","Sjc-0006688",
+         "Sjc-0002874","Sjc-0006098",
+         "Sjc-0001532","Sjc-0000442",
+         "Sjc-0003328","Sjc-0003596",
+         "Sjc-0006005","Sjc-0009496",
+         "Sjc-0000143","Sjc-0007481",
+         "Sjc-0006063","Sjc-0008752",
+         
+         "Sjc-0000798","Sjc-0000815","Sjc-0002320",
+         "Sjc-0003262","Sjc-0004057","Sjc-0003639",
+         "Sjc-0002429","Sjc-0001237","Sjc-0006108","Sjc-0001200",
+         "Sjc-0003345","Sjc-0006850",
+         "Sjc-0004182","Sjc-0005751",
+         "Sjc-0000820","Sjc-0003404",
+         "Sjc-0000814","Sjc-0006754",
+         "Sjc-0006669","Sjc-0004903",
+         "Sjc-0000744","Sjc-0002008","Sjc-0001267")
+dp <- DotPlot(Neuron.combined,features = ids) + RotatedAxis()  + 
+  theme_pubr(border = T) + RotatedAxis() + 
+  theme(axis.text = element_text(size = 10,hjust = 1),
+        panel.border = element_rect(fill = NULL,linewidth = 1,colour = "black")) + scale_colour_gradientn(colours = c('grey',rev(brewer.pal(n = 11, name = "Spectral"))[-1])) + RotatedAxis() + xlab("") + ylab("")
+
+ggsave("../PDFfiles_20240725/FigS4A.pdf",width = 10.8*1.1,height = 5*1.1,plot = dp )
+
+dp
+
+
+```
+
+
+
+
+# export
+```{r}
+sceasy::convertFormat(Neuron.combined,from = 'seurat',to = 'anndata',outFile = "../01.rds_files/Neuron.combined.h5ad")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
