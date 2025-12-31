@@ -1,0 +1,971 @@
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(Seurat)
+library(slingshot)
+library(tradeSeq)
+library(RColorBrewer)
+library(ggpubr)
+```
+
+# load data
+```{r}
+Neoblast.combined <- readRDS(file = "../01.rds_files/Neoblast.combined.rds")
+```
+
+# assign cell clusters to cell types
+```{r}
+Neoblast.combined$seurat_clusters <- Neoblast.combined$integrated_snn_res.3
+
+Neoblast.combined@meta.data <- Neoblast.combined@meta.data %>%
+    mutate(newCell_Type = case_when(
+        seurat_clusters %in% c(2, 4, 7, 10, 11, 30, 33, 34) ~ "SSCs-1", # alpha
+        seurat_clusters %in% c(5, 9, 13, 15) ~ "SSCs-2", # beta
+        seurat_clusters %in% c(3, 8, 16, 17, 22, 40) ~ "SSCs-5", # gamma 1
+        seurat_clusters %in% c(18, 27) ~ "SSCs-6", # gamma 2
+        seurat_clusters %in% c(14, 24) ~ "SSCs-7", # delta
+        seurat_clusters %in% c(1, 29) ~ "SSCs-3", # 'SSCs-epsilon',
+        seurat_clusters %in% c(12) ~ "SSCs-4", # kappa
+        seurat_clusters %in% c(6, 20) ~ "S1",
+        seurat_clusters %in% c(21) ~ "SSCs-8", # nu
+        seurat_clusters %in% c(0, 26, 31) ~ "S1 progeny",
+        seurat_clusters %in% c(32) ~ "Early Vo",
+        seurat_clusters %in% c(42, 38) ~ "Late Vo",
+        seurat_clusters %in% c(36) ~ "Mehlis gland",
+        seurat_clusters %in% c(19, 28, 35) ~ "GSCs",
+        seurat_clusters %in% c(23, 25) ~ "GSC progeny",
+        seurat_clusters %in% c(37) ~ "Female gametophyte",
+        seurat_clusters %in% c(39, 41) ~ "Male gametophyte"
+    ))
+
+Neoblast.combined@meta.data$newCell_Type <- factor(as.character(Neoblast.combined@meta.data$newCell_Type),
+    levels = c(
+        "SSCs-1",
+        "SSCs-2",
+        "SSCs-3",
+        "SSCs-4",
+        "SSCs-5",
+        "SSCs-6",
+        "SSCs-7",
+        "SSCs-8",
+        "GSCs",
+        "GSC progeny",
+        "Female gametophyte",
+        "Male gametophyte",
+        "S1",
+        "S1 progeny",
+        "Early Vo",
+        "Late Vo",
+        "Mehlis gland"
+    )
+)
+```
+
+
+# FigS7a
+```{r fig.height=5, fig.width=12}
+col_pal <- col_vectors[1:length(unique(Neoblast.combined@meta.data$newCell_Type))]
+FigS7a <- create_numbered_umap(seurat_obj = Neoblast.combined, split_by = "Sex", col_vectors = col_pal, pointSize = 0.01, labelSize = 10)
+ggsave("../02.figures/FigS7a.pdf", width = 12, height = 5, plot = FigS7a)
+```
+
+# FigS7b/7c
+```{r fig.height=4.5, fig.width=10}
+DefaultAssay(Neoblast.combined) <- "RNA"
+Idents(Neoblast.combined) <- Neoblast.combined$newCell_Type
+
+
+ids <- c(
+    "Sjc-0000924", "Sjc-0005962", "Sjc-0008047",
+    #' Sjc-0001581',
+    "Sjc-0001581", "Sjc-0007059", "Sjc-0008087", "Sjc-0001087", # δ'
+    "Sjc-0009220", "Sjc-0001001", "Sjc-0006063",
+    "Sjc-0001890",
+    "Sjc-0005317",
+    "Sjc-0005761", "Sjc-0006155", # epsilon
+    "Sjc-0001481", "Sjc-0005786",
+    "Sjc-0000674", "Sjc-0004091",
+    "Sjc-0006622", "Sjc-0009231", "Sjc-0008219",
+    "Sjc-0004774", "Sjc-0007561", # GSC
+    "Sjc-0004512", "Sjc-0003040",
+    "Sjc-0001604", "Sjc-0000843",
+    "Sjc-0000108", "Sjc-0002828",
+    "Sjc-0003451", "Sjc-0007461",
+    "Sjc-0006798", "Sjc-0006800", "Sjc-0000278", "Sjc-0003576", "Sjc-0000795"
+)
+
+
+
+# ID2NAME_new <- ID2NAME
+ID2NAME_new$gene_name <- ID2NAME_new$new_gene_name
+original_gene_ids <- ids
+custom_gene_names <- convert_id_name(ids, "id", ID2NAME_new)
+names(custom_gene_names) <- original_gene_ids
+
+# 首先检查数据的分布
+plot_data <- Seurat::DotPlot(Neoblast.combined, features = original_gene_ids, scale = FALSE)$data
+quantile(plot_data$avg.exp, c(0.05, 0.25, 0.5, 0.75, 0.95))
+
+
+
+Fig_dotplot_cellmarker.f <- Seurat::DotPlot(
+    subset(Neoblast.combined, Sex == "Female"),
+    features = original_gene_ids,
+    scale = TRUE
+) +
+    theme(
+        axis.text = element_text(size = 10, hjust = 1),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.border = element_rect(fill = NULL, linewidth = 1, colour = "black")
+    ) +
+    scale_colour_gradientn(
+        colours = c("grey", rev(brewer.pal(n = 11, name = "Spectral"))[-1]),
+        limits = c(-2, 2), # 限制颜色范围，增强对比度
+        oob = scales::squish, # 超出范围的值被压缩到边界
+        name = "Log Expression"
+    ) +
+    scale_x_discrete(labels = custom_gene_names) +
+    xlab("") + ylab("")
+
+
+Fig_dotplot_cellmarker.m <- Seurat::DotPlot(
+    subset(Neoblast.combined, Sex == "Male"),
+    features = original_gene_ids,
+    scale = TRUE
+) +
+    theme(
+        axis.text = element_text(size = 10, hjust = 1),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.border = element_rect(fill = NULL, linewidth = 1, colour = "black")
+    ) +
+    scale_colour_gradientn(
+        colours = c("grey", rev(brewer.pal(n = 11, name = "Spectral"))[-1]),
+        limits = c(-2, 2), # 限制颜色范围，增强对比度
+        oob = scales::squish, # 超出范围的值被压缩到边界
+        name = "Log Expression"
+    ) +
+    scale_x_discrete(labels = custom_gene_names) +
+    xlab("") + ylab("")
+
+p <- Fig_dotplot_cellmarker.f + Fig_dotplot_cellmarker.m
+
+ggsave("../02.figures/FigS7bc.pdf", width = 20, height = 6, plot = p)
+```
+
+
+
+# FigS11a
+```{r fig.height=6, fig.width=8}
+library(reshape2)
+library(ggpubr)
+library(ggalluvial)
+
+Idents(Neoblast.combined) <- Neoblast.combined@meta.data$Cell_Type
+df <- Neoblast.combined@meta.data %>%
+    dplyr::select("sample", "Cell_Type") %>%
+    table()
+df <- as.data.frame(prop.table(df, 1) * 100)
+df$sample <- factor(df$sample, levels = c(
+    "26dpi_F", "22dpi_F", "18dpi_F",
+    "18dpi_M", "22dpi_M", "26dpi_M"
+))
+
+df$Sex <- if_else(grepl("F", df$sample), "Female", "Male")
+
+FigS11a <- map(split(df, df$Sex), function(d) {
+    ggplot(
+        d,
+        aes(
+            x = sample, stratum = Cell_Type, alluvium = Cell_Type,
+            y = Freq,
+            fill = Cell_Type, label = Cell_Type
+        )
+    ) +
+        scale_x_discrete(expand = c(.1, .1)) +
+        scale_fill_manual(values = col_vectors[1:length(unique(Neoblast.combined@meta.data$Cell_Type))]) +
+        geom_flow() +
+        geom_stratum(
+            stat = "alluvium",
+            color = "darkgray"
+        ) +
+        theme(legend.position = "right", axis.line = element_blank(), panel.background = element_blank()) +
+        ggtitle("Frequency of cells in different conditions")
+}) %>% patchwork::wrap_plots(ncol = 2, guides = "collect")
+
+ggsave("../02.figures/FigS11a.pdf", width = 8, height = 6, plot = FigS11a)
+FigS11a
+```
+
+
+# FigS11b
+```{r fig.height=4, fig.width=6}
+FigS11b <- barplot_per(Neoblast.combined,
+    colValues = c(
+        "#B2182B", "#EF8A62", "#FDDBC7", "#D1E5F0", "#67A9CF", "#2166AC"
+    )
+    # ,levels = c('26dpi_F','22dpi_F','18dpi_F','18dpi_M', '22dpi_M','26dpi_M')
+) + xlab("") + theme(axis.text.x = element_text(angle = 90, hjust = 0, vjust = 0.2, face = "bold"))
+
+ggsave("../02.figures/FigS11b.pdf", width = 6, height = 4, plot = FigS11b)
+FigS11b
+```
+
+
+
+# Sub-clustering analysis of vitelline lineage
+```{r}
+library(gam)
+library(slingshot)
+library(SingleCellExperiment)
+library(scater)
+library(ggpubr)
+DefaultAssay(Neoblast.combined.f) <- "RNA"
+
+saveRDS(Neoblast.combined.f.degs, "../01.rds_files/Neoblast.combined.f.degs.rds")
+
+seu_vo_lineage <- Neoblast.combined.f[, Neoblast.combined.f$newCell_Type %in%
+    c("S1", "S1 progeny", "Early Vo", "Late Vo")]
+```
+
+# Fine-cell annotation of vitelline lineage
+```{r}
+seu_vo_lineage@meta.data <- seu_vo_lineage@meta.data %>%
+    mutate(fineCell_Type = case_when(
+        seurat_clusters %in% c(20) ~ "S1_0",
+        seurat_clusters %in% c(6) ~ "S1_1",
+        seurat_clusters %in% c(31) ~ "S1p_0",
+        seurat_clusters %in% c(26) ~ "S1p_1",
+        seurat_clusters %in% c(0) ~ "S1p_2",
+        seurat_clusters %in% c(32) ~ "EVo",
+        seurat_clusters %in% c(42) ~ "LVo_0",
+        seurat_clusters %in% c(38) ~ "LVo_1"
+    ))
+seu_vo_lineage@meta.data$fineCell_Type <- factor(as.character(seu_vo_lineage@meta.data$fineCell_Type),
+    levels = c(
+        "S1_0", "S1_1", "S1p_0",
+        "S1p_1", "S1p_2", "EVo",
+        "LVo_0", "LVo_1"
+    )
+)
+```
+
+
+# FigS9a
+
+```{r fig.height=4, fig.width=5}
+library(ggpubr)
+library(RColorBrewer)
+library(tidyverse)
+
+# plot_slingshot(SlingshotDataSet(sce),show_arrow = T,curve_range = c(0.15, 0.95))
+
+pumap <- create_numbered_umap(seu_vo_lineage, group_by = "fineCell_Type", col_vectors = col_vector)
+
+ggsave("../02.figures/FigS9a.pdf", width = 5, height = 4, plot = pumap)
+```
+
+
+
+
+# Dotplot of select marker genes
+```{r}
+filter_markers <- function(seumarker, ID2NAME) {
+    select_Markers <- seumarker %>%
+        mutate(GeneName = ID2NAME[gene, "Gene_Name"]) %>%
+        filter(!(grepl("^ND|^C|^ATP", gene))) %>%
+        filter(!(grepl("^Sjc", GeneName))) %>%
+        filter(!(grepl("^R[P][SL]", toupper(GeneName)))) %>%
+        group_by(cluster) %>%
+        top_n(n = -20, wt = p_val_adj) %>%
+        group_by(cluster) %>%
+        dplyr::top_n(n = 10, wt = avg_log2FC) %>%
+        top_n(n = 5, wt = avg_log2FC) %>%
+        distinct(gene, .keep_all = T)
+    return(select_Markers)
+}
+
+
+neo_cellmarker_f %>%
+    mutate(Note = ID2NAME[gene, "Note"]) %>%
+    filter(!(grepl("^ND|^C|^ATP", gene))) %>%
+    dplyr::filter(cluster %in% c(42))
+
+select_Markers <- filter_markers(neo_cellmarker_f, ID2NAME)
+
+select_Markers
+
+
+vo_cellmarker_ids <- neo_marker_cosg$names[, colnames(neo_marker_cosg$names) %in% unique(seu_vo_lineage$seurat_clusters)] %>%
+    stack() %>%
+    dplyr::filter(!grepl("^ND|^C|^ATP", values)) %>%
+    dplyr::mutate(cls = factor(ind, levels = c(20, 6, 31, 26, 0, 32, 42, 38))) %>%
+    dplyr::arrange(cls) %>%
+    dplyr::group_by(cls) %>%
+    dplyr::slice_head(n = 5) %>%
+    pull(values)
+
+
+neo_cellmarker_f_subvo <- neo_cellmarker_f[neo_cellmarker_f$cluster %in% unique(seu_vo_lineage$seurat_clusters), ]
+
+
+subvo_cls <- c(
+    "S1_0", "S1_1", "S1p_0",
+    "S1p_1", "S1p_2",
+    "EVo", "LVo_0", "LVo_1"
+)
+names(subvo_cls) <- c(20, 6, 31, 26, 0, 32, 42, 38)
+neo_cellmarker_f_subvo$cluster <- subvo_cls[as.character(neo_cellmarker_f_subvo$cluster)]
+
+neo_cellmarker_f_subvo$cluster <- factor(neo_cellmarker_f_subvo$cluster, levels = c(
+    "S1_0", "S1_1", "S1p_0",
+    "S1p_1", "S1p_2", "EVo",
+    "LVo_0", "LVo_1"
+))
+
+neo_cellmarker_f_subvo <- neo_cellmarker_f_subvo %>%
+    dplyr::filter(p_val_adj < 0.05) %>%
+    dplyr::arrange(cluster)
+
+
+writexl::write_xlsx(
+    split(neo_cellmarker_f_subvo, neo_cellmarker_f_subvo$cluster),
+    "../02.figures/tables/vo_cellmarker.xlsx"
+)
+```
+
+
+# FigS9b
+```{r fig.height=5, fig.width=9}
+ids <- c(
+    "Sjc-0000108", "Sjc-0000278", "Sjc-0002805",
+    "Sjc-0001662", "Sjc-0001005", "Sjc-0005295", "Sjc-0005365", "Sjc-0006610",
+    "Sjc-0004280", "Sjc-0002828", "Sjc-0002171", "Sjc-0006066", "Sjc-0006745",
+    "Sjc-0003538", "Sjc-0003891", "Sjc-0000177", "Sjc-0006030", "Sjc-0001878",
+    "Sjc-0009101", "Sjc-0004269", "Sjc-0000014", "Sjc-0001339", "Sjc-0000087",
+    "Sjc-0004097", "Sjc-0009196", "Sjc-0005816", "Sjc-0005796", "Sjc-0003393",
+    "Sjc-0005021", "Sjc-0001886", "Sjc-0001888", "Sjc-0005034",
+    "Sjc-0007461", "Sjc-0006798", "Sjc-0006799",
+    "Sjc-0006673",
+    "Sjc-0004903", "Sjc-0000117", "Sjc-0004267", "Sjc-0000244"
+)
+
+ID2NAME_new <- ID2NAME
+ID2NAME_new$gene_name <- ID2NAME$new_gene_name
+
+original_gene_ids <- ids
+custom_gene_names <- convert_id_name(ids, "id", ID2NAME_new)
+names(custom_gene_names) <- original_gene_ids
+
+
+
+Idents(seu_vo_lineage) <- seu_vo_lineage$fineCell_Type
+DefaultAssay(seu_vo_lineage) <- "RNA"
+dp <- DotPlot(seu_vo_lineage, features = ids) + RotatedAxis() +
+    theme_pubr(border = T) + RotatedAxis() +
+    theme(
+        axis.text = element_text(size = 10, hjust = 1),
+        panel.border = element_rect(fill = NULL, linewidth = 1, colour = "black")
+    ) +
+    scale_colour_gradientn(colours = c("grey", rev(brewer.pal(n = 11, name = "Spectral"))[-1])) +
+    RotatedAxis() +
+    scale_x_discrete(labels = custom_gene_names) +
+    xlab("") + ylab("")
+dir.create("../02.figures/vo_lineage/")
+ggsave(filename = "../02.figures/vo_lineage/FigS9b.pdf", width = 9, height = 5, plot = dp)
+```
+
+
+# Trajectory_inference using Slingshot
+
+### 1) Choose start cell states
+```{r}
+DefaultAssay(seu_vo_lineage) <- "RNA"
+Idents(seu_vo_lineage) <- seu_vo_lineage$fineCell_Type
+VlnPlot(seu_vo_lineage, features = c("Sjc-0000108", "Sjc-0009220", "Sjc-0000924"))
+```
+CytoTRACE
+```{r}
+# FigS9e
+expr <- seu_vo_lineage@assays$RNA@counts[rowSums(seu_vo_lineage@assays$RNA@counts) > 0, ]
+res <- CytoTRACE::CytoTRACE(as.matrix(expr))
+cls_l <- as.character(seu_vo_lineage@meta.data$fineCell_Type)
+names(cls_l) <- rownames(seu_vo_lineage@meta.data)
+CytoTRACE::plotCytoTRACE(
+    cyto_obj = res,
+    # gene = 'Sjc-0005962',
+    phenotype = cls_l, # 细胞类型注释
+    emb = Seurat::Embeddings(seu_vo_lineage, reduction = "umap"), # 是否提供细胞降维坐标
+    outputDir = "../02.figures/" # 图片储存路径
+)
+```
+### 2) Run Slingshot
+```{r}
+DefaultAssay(seu_vo_lineage) <- "integrated"
+
+sce <- as.SingleCellExperiment(seu_vo_lineage, assay = "integrated")
+sce <- slingshot(
+    sce,
+    reducedDim = "UMAP",
+    clusterLabels = "fineCell_Type",
+    start.clus = "S1_0", end.clus = c("LVo_0", "LVo_1"),
+    stretch = 1,
+    df = 5,
+    shrink = T
+)
+```
+
+```{r}
+saveRDS(sce, "../01.rds_files/slingshot_sce_voLinegae.rds")
+sce <- readRDS("../01.rds_files/slingshot_sce_voLinegae.rds")
+```
+
+
+### 3) Visualize
+# FigS9cd
+```{r fig.height=6, fig.width=8}
+p <- plot_trajectory_on_background(sce, seu_vo_lineage, lineage_idx = 1, line_width = 0.5, point_size = 0.05, curve_range = c(0.15, 1)) /
+    plot_trajectory_on_background(sce, seu_vo_lineage, lineage_idx = 2, line_width = 0.5, point_size = 0.05, curve_range = c(0.13, 0.85))
+
+p <- p & theme_pubr(border = T, legend = "right")
+ggsave("../02.figures/FigS9cd.pdf", width = 8, height = 6, plot = p)
+```
+
+
+### 4) Tradeseq
+```{r}
+library(tradeSeq)
+# seurat :seu_vo_lineage
+# slingshot : sce
+counts <- GetAssayData(object = seu_vo_lineage, assay = "RNA", slot = "counts")
+
+set.seed(5)
+icMat <- evaluateK(
+    counts = counts, sds = crv, k = 3:10,
+    nGenes = 200, verbose = T, plot = TRUE
+)
+```
+
+
+```{r}
+job::job(
+    {
+        library(slingshot)
+        library(tradeSeq)
+        set.seed(6)
+        crv <- SlingshotDataSet(sce)
+        sce.new <- fitGAM(counts = counts, sds = crv, nknots = 6, verbose = FALSE)
+        saveRDS(sce.new, "~/01.rds_files/tradeseq_voLinegae_f.rds")
+    },
+    import = list(counts, sce)
+)
+
+sce.new <- readRDS("~/01.rds_files/tradeseq_voLinegae_f.rds")
+```
+
+```{r}
+table(rowData(sce.new)$tradeSeq$converged)
+```
+
+# associationTest
+```{r}
+assoRes <- associationTest(sce.new)
+head(assoRes)
+assoRes %>% dplyr::filter(pvalue < 0.05)
+```
+
+
+```{r}
+assocRes_lineages <- associationTest(sce.new, lineages = TRUE, l2fc = log2(2))
+```
+
+
+```{r}
+plot_trend_glist <- function(glist, sce = sce.new, counts = counts) {
+    p_trend <- lapply(glist$gene, function(x) {
+        p <- plotSmoothers(sce, counts, gene = x) +
+            ggtitle(label = ID2NAME[x, ]$new_gene_name, subtitle = ID2NAME[x, ]$Note)
+        p
+    })
+    names(p_trend) <- glist$gene
+    return(p_trend)
+}
+```
+
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(ClusterGVis)
+library(org.Sjaponicum.eg.db)
+```
+
+
+```{r}
+mat <- getGroupMat(sce, counts, select_genes = startRes_glist$gene)
+getClusters(obj = as.data.frame(na.omit(smoothMatrix(mat))))
+mat <- as.data.frame(na.omit(smoothMatrix(mat)))
+rownames(mat) <- revID(rownames(mat))
+ck <- clusterData(
+    obj = mat,
+    scaleData = T,
+    cluster.method = "kmeans",
+    cluster.num = 4
+)
+```
+
+
+```{r}
+ptime <- seq(0, 1, length.out = 100)
+topha <- HeatmapAnnotation(
+    Pseudotime = ptime,
+    col = list(Pseudotime = colorRamp2(seq(0, 1, 1 / (length(cList$`Blue-Yellow-Red`) - 1)), cList$`Blue-Yellow-Red`))
+)
+```
+
+
+```{r}
+GO_objList <- lapply(ck$cluster.list,
+    SJDB::getGO,
+    universeIDs = revID(rownames(seu_vo_lineage)), version = "V3"
+)
+
+ko_c1 <- SJDB::getKEGG(
+    geneid = ck$cluster.list$C2,
+    universeIDs = revID(rownames(seu_vo_lineage)), version = "V3"
+)
+
+# getGO(ck$cluster.list$C6, universeIDs = revID(rownames(seu_vo_lineage)), version = "V3", qCutoff = 1)
+
+GO_list <- lapply(ck$cluster.list, function(x) {
+    go <- clusterProfiler::enrichGO(
+        gene = x, OrgDb = "org.Sjaponicum.eg.db",
+        keyType = "GENEID", ont = "BP", pvalueCutoff = 1,
+        pAdjustMethod = "BH", qvalueCutoff = 1,
+        minGSSize = 10, maxGSSize = 500, readable = FALSE
+    )
+    go
+})
+
+C5 <- clusterProfiler::enrichGO(
+    gene = ck$cluster.list$C5, OrgDb = "org.Sjaponicum.eg.db",
+    keyType = "GENEID", ont = "BP", pvalueCutoff = 1,
+    pAdjustMethod = "BH", qvalueCutoff = 1,
+    minGSSize = 10, maxGSSize = 500, readable = FALSE
+)
+```
+
+
+
+```{r}
+revigo <- function(GO_obj,
+                   n = 50,
+                   p_cutoff = 0.01,
+                   version = "V3") {
+    library(rrvgo)
+    library(clusterProfiler)
+    if (version == "V3") {
+        OrgDB <- "org.Sjaponicum.eg.db"
+    } else if (version == "V4") {
+        OrgDB <- "org.SjaponicumV4.eg.db"
+    } else {
+        print("Please provide genome version V3 or V4!")
+    }
+
+    bp <- as.data.frame(GO_obj)
+
+    if (dim(bp)[1] >= 1) {
+        bp_top <- bp %>%
+            dplyr::filter(pvalue < p_cutoff)
+
+        tryCatch(
+            {
+                simMatrix <- calculateSimMatrix(bp_top$ID,
+                    keytype = "GENEID",
+                    orgdb = OrgDB,
+                    ont = "BP",
+                    method = "Rel"
+                )
+
+                scores <- setNames(-log10(bp_top$qvalue), bp_top$ID)
+                reducedTerms <- reduceSimMatrix(simMatrix,
+                    scores,
+                    threshold = 0.7, keytype = "GENEID",
+                    orgdb = OrgDB
+                )
+
+                bp_top <- bp_top[bp_top$ID %in% reducedTerms$parent, ]
+            },
+            error = function(e) {
+                message("Caught an error: ", e$message)
+                bp_top <- bp
+            }
+        )
+    } else {
+        bp_top <- NULL
+        message("No enrichment GO termss")
+    }
+    return(bp_top)
+}
+
+
+revigo_list <- lapply(GO_list, revigo)
+
+
+revigo_list
+```
+
+
+#### *associationTest
+```{r}
+assoRes <- associationTest(sce.new, lineages = TRUE)
+assoRes_glist <- assoRes %>%
+    dplyr::filter(pvalue_1 < 1e-5) %>%
+    dplyr::mutate(
+        gene = rownames(.),
+        gene_name = ID2NAME[gene, "gene_name"],
+        Note = ID2NAME[gene, "Note"]
+    )
+
+assoRes_glist
+```
+
+
+
+```{r}
+mat <- getGroupMat(sce, counts, select_genes = assoRes_glist$gene)
+getClusters(obj = as.data.frame(na.omit(smoothMatrix(mat))))
+```
+
+
+```{r}
+mat <- as.data.frame(na.omit(smoothMatrix(mat)))
+rownames(mat) <- revID(rownames(mat))
+ck <- clusterData(
+    obj = mat,
+    scaleData = F,
+    cluster.method = "kmeans",
+    cluster.num = 6
+)
+```
+
+
+```{r}
+bin_celltypes <- getBinCellTypes_fixed(sce, Pseudotime = "slingPseudotime_1", celltype_col = "fineCell_Type")
+
+cell_type_colors <- col_vector[1:length(levels(colData(sce)$fineCell_Type))]
+names(cell_type_colors) <- levels(colData(sce)$fineCell_Type)
+
+
+ptime <- seq(0, 1, length.out = 100)
+
+topha <- HeatmapAnnotation(
+    Pseudotime = ptime,
+    CellType = bin_celltypes,
+    col = list(
+        Pseudotime = colorRamp2(seq(0, 1, 1 / (length(cList$`Blue-Yellow-Red`) - 1)), cList$`Blue-Yellow-Red`),
+        CellType = cell_type_colors[c(1, 2, 3, 4, 6, 7)]
+    )
+)
+```
+
+
+# FigS9g
+```{r fig.height=6.5, fig.width=10.5}
+GO_list.vo <- lapply(ck$cluster.list, function(x) {
+    go <- clusterProfiler::enrichGO(
+        gene = x, OrgDb = "org.Sjaponicum.eg.db",
+        keyType = "GENEID", ont = "BP", pvalueCutoff = 1,
+        pAdjustMethod = "BH", qvalueCutoff = 1,
+        minGSSize = 10, maxGSSize = 500, readable = FALSE
+    )
+    return(revigo(go))
+})
+
+termanno.vo <- df.vo %>%
+    dplyr::group_by(cluster) %>%
+    dplyr::slice_min(order_by = pvalue, n = 4) %>%
+    dplyr::ungroup() %>%
+    dplyr::select(cluster, Description, pvalue) %>%
+    dplyr::rename(id = cluster, term = Description)
+termanno.vo$pvalue[termanno.vo$pvalue < 1e-10] <- 1e-10
+
+
+saveRDS(ck, "../02.figures/volineage_ck.rds")
+
+pdf("../02.figures/FigS9g.pdf", width = 10.2, height = 5.5)
+visCluster(
+    object = ck,
+    plot.type = "both",
+    HeatmapAnnotation = topha,
+    annoTerm.data = termanno.vo,
+    term.text.limit = c(9, 12),
+    cluster.order = c(1, 3, 6, 5, 4, 2),
+    add.sampleanno = T
+)
+dev.off()
+```
+
+
+
+# Export
+```{r}
+saveRDS(seu_vo_lineage, "../01.rds_files/seu_vo_lineage.rds")
+saveRDS(sce, "../01.rds_files/sce_vo_lineage.rds")
+```
+
+
+```{r}
+plot_trajectory_on_background <- function(sce,
+                                          full_seurat_obj,
+                                          lineage_idx = 1,
+                                          point_size = 0.5,
+                                          arrow_size = 0.1,
+                                          line_width = 1.0) {
+    library(ggplot2)
+    library(RColorBrewer)
+    library(dplyr)
+    library(SingleCellExperiment)
+
+    # 1. 准备绘图数据框
+    # 从完整的Seurat对象中获取所有细胞的UMAP坐标
+    all_coords <- as.data.frame(Embeddings(full_seurat_obj, reduction = "umap"))
+    all_coords$cell_id <- rownames(all_coords)
+
+    # 从sce对象中获取轨迹细胞的伪时间
+    traj_cells <- colnames(sce)
+    pdt <- slingPseudotime(sce)
+
+    # 检查并选择正确的lineage
+    if (ncol(pdt) > 1 && lineage_idx > ncol(pdt)) {
+        warning("lineage_idx is out of bounds. Using the first lineage.")
+        lineage_idx <- 1
+    }
+
+    pdt_df <- data.frame(
+        cell_id = traj_cells,
+        pseudotime = pdt[, lineage_idx]
+    )
+
+    # 2. 合并数据框
+    # 将所有细胞的坐标与轨迹细胞的伪时间合并
+    # 非轨迹细胞的 pseudotime 值将为 NA
+    plot_df <- left_join(all_coords, pdt_df, by = "cell_id")
+
+    # 3. 创建ggplot对象
+    # 首先绘制所有点，NA值（背景细胞）将被设置为灰色
+    p <- ggplot(plot_df, aes(x = UMAP_1, y = UMAP_2)) +
+        geom_point(aes(color = pseudotime), size = point_size) +
+        # 使用 scale_color_gradientn 来更好地控制颜色，并将NA值设为灰色
+        scale_color_gradientn(
+            colors = rev(brewer.pal(11, "Spectral")[-6]),
+            na.value = "grey80", # <-- 这里是关键！
+            name = "Pseudotime"
+        ) +
+        theme_classic() +
+        labs(title = paste("Lineage", lineage_idx, "on Full UMAP")) +
+        coord_equal() # 保持UMAP的纵横比
+
+    # 4. 添加轨迹曲线
+    curves < -slingCurves(sce, as.df = TRUE)
+    if ("Lineage" %in% colnames(curves)) {
+        curves_selected <- curves[curves$Lineage == lineage_idx, ]
+    } else {
+        curves_selected <- curves
+    }
+
+    if (nrow(curves_selected) > 0) {
+        arrow_style <- arrow(type = "closed", length = unit(arrow_size, "inches"))
+
+        p <- p + geom_path(
+            data = curves_selected %>% arrange(Order),
+            aes(x = UMAP_1, y = UMAP_2), # group aesthetic is not needed here
+            color = "black", size = line_width,
+            arrow = arrow_style
+        )
+    }
+
+    return(p)
+}
+```
+
+
+```{r}
+plot_slingshot <- function(sds, show_arrow) {
+    test <- data.frame(reducedDims(sds))
+    if (length(sds@lineages) > 1) {
+        pdt_agg1 <- apply(slingPseudotime(sds)[, c(1:length(sds@lineages))], 1, function(t) mean(t, na.rm = T))
+    } else {
+        pdt_agg1 <- slingPseudotime(sds)
+    }
+    test$pseudotime <- pdt_agg1
+    p <- ggscatter(test, x = "UMAP_1", y = "UMAP_2", color = "pseudotime", size = 0.8) +
+        gradient_color(palette = rev(brewer.pal(11, "Spectral")[-6])) +
+        theme_pubr(border = T)
+
+    curves <- slingCurves(sds, as.df = TRUE)
+    arrow_style <- arrow(type = "closed", length = unit(0.1, "inches"))
+    if (show_arrow) {
+        p <- p + geom_path(
+            data = curves %>% arrange(Order),
+            aes(group = Lineage), show.legend = T, arrow = arrow_style
+        )
+    }
+    p
+}
+```
+
+
+```{r fig.height=5, fig.width=4.5}
+plot_slingshot(SlingshotDataSet(sce), show_arrow = T)
+```
+
+
+
+```{r}
+Idents(seu_vo_lineage) <- seu_vo_lineage@meta.data$newCell_Type
+marker_cosg <- COSG::cosg(
+    seu_vo_lineage,
+    groups = "all",
+    assay = "RNA",
+    slot = "data",
+    mu = 1,
+    n_genes_user = 100
+)
+DotPlot(seu_vo_lineage, features = stack(head(marker_cosg$names, 5))$value) & RotatedAxis()
+```
+
+
+
+
+
+
+```{r}
+library(viridis)
+ptplot <- function(sce, lineage = "slingPseudotime_1", m, n) {
+    p <- as.data.frame(colData(sce)[, lineage])
+    colnames(p) <- "slingpt"
+    p$new <- p$slingpt
+    p$new[which(p$slingpt < m)] <- NA
+    p$new[which(p$slingpt > n)] <- NA
+
+    # 使用viridis调色板
+    color_palette <- viridis(100)
+    plotcol <- color_palette[cut(p$new, breaks = 100)]
+    plotcol <- ifelse(is.na(plotcol), "grey", plotcol)
+
+    plot(reducedDims(sce)$UMAP, col = plotcol, pch = 16, asp = 1)
+}
+```
+
+
+
+
+
+```{r}
+seu_subset <- subset(Neoblast.combined.f, newCell_Type %in% c(
+    "S1",
+    "S1 progeny",
+    "Early Vo",
+    "Late Vo"
+))
+
+
+seu_subset <- FindVariableFeatures(seu_subset)
+seu_subset <- ScaleData(seu_subset)
+seu_subset <- RunPCA(seu_subset)
+seu_subset <- RunUMAP(seu_subset, dims = 1:15) # 使用适合子集的PC数量
+
+
+# 3. 在子集上运行Slingshot (Run Slingshot on the subset)
+umap_subset <- Embeddings(seu_subset, "umap")
+clusters_subset <- Idents(seu_subset)
+
+sds_subset <- slingshot(umap_subset,
+    clusterLabels = clusters_subset,
+    start.clus = "S1"
+)
+
+DimPlot(seu_subset)
+
+plot_slingshot(SlingshotDataSet(sds_subset))
+```
+
+
+
+```{r  fig.height=8, fig.width=12}
+DimPlot(seu_neo, group.by = c("newCell_Type", "seurat_clusters", "phase"), split.by = "sample") & scale_color_manual(values = col_pal)
+```
+## COSG
+```{r}
+Idents(seu_neo) <- seu_neo@meta.data$seurat_clusters
+marker_cosg <- COSG::cosg(
+    seu_neo,
+    groups = "all",
+    assay = "RNA",
+    slot = "data",
+    mu = 1,
+    n_genes_user = 100
+)
+```
+
+
+
+```{r fig.height=15, fig.width=25}
+ids <- c(
+    "Sjc-0000108", # S1
+    "Sjc-0003451", # S1 progeny/early
+    "Sjc-0007461", # late vitellocytes
+    "Sjc-0001887", # mature vitellocytes
+    "Sjc-0006753",
+    "Sjc-0006798",
+    "Sjc-0006800",
+    "Sjc-0006622",
+    "Sjc-0000278",
+    "Sjc-0000795",
+    "Sjc-0003576"
+)
+
+FeaturePlot(seu_neo, features = ids, min.cutoff = "q1", max.cutoff = "q99") & NoAxes() & NoLegend()
+```
+
+
+```{r fig.height=25, fig.width=25}
+cell.markers <- stack(head(marker_cosg$names, 2)) %>% pull(values)
+
+FeaturePlot(seu_neo, features = cell.markers, min.cutoff = "q1", max.cutoff = "q99") & NoAxes() & NoLegend()
+```
+
+### Slingshot
+```{r fig.height=5, fig.width=5}
+library(ggpubr)
+library(RColorBrewer)
+library(dplyr)
+Idents(seu_neo) <- seu_neo$newCell_Type
+sce <- as.SingleCellExperiment(seu_neo, assay = "RNA")
+
+sce_neo <- slingshot(
+    sce,
+    reducedDim = "UMAP",
+    clusterLabels = "newCell_Type",
+    start.clus = "S1",
+    stretch = 1,
+    # allow_breaks,
+    thresh = 0.05
+)
+
+sds_neo <- SlingshotDataSet(sce_neo)
+
+plot_slingshot(sds_neo, show_arrow = T)
+```
+
+
+```{r}
+FeaturePlot(subset(seu_neo, `Sjc-0000108` <= 0.0001), features = c("Sjc-0000278"), min.cutoff = "q1", max.cutoff = "q99", ncol = 3) & NoAxes() & NoLegend()
+```
+
+
+# RNA velocity
+```{r}
+source("R/Velocity.R")
+save_filesFORscVelo(Neoblast.combined, filename = "Neoblast.combined", baseDIR = "../04.velocity/")
+```

@@ -1,0 +1,717 @@
+```{r}
+Neuron.combined <- readRDS(file = "~/Projects/scRNA-seq/data/Neuron_seob.rds")
+```
+
+
+# FigS11A
+```{r fig.height=6, fig.width=8}
+library(reshape2)
+library(ggpubr)
+library(ggalluvial)
+
+Idents(Neuron.combined) <- Neuron.combined@meta.data$Cell_Type
+df <- Neuron.combined@meta.data %>%
+    dplyr::select("sample", "Cell_Type") %>%
+    table()
+df <- as.data.frame(prop.table(df, 1) * 100)
+df$sample <- factor(df$sample, levels = c(
+    "26dpi_F", "22dpi_F", "18dpi_F",
+    "18dpi_M", "22dpi_M", "26dpi_M"
+))
+
+
+df$Sex <- if_else(grepl("F", df$sample), "Female", "Male")
+
+FigS11A <- map(split(df, df$Sex), function(d) {
+    ggplot(
+        d,
+        aes(
+            x = sample, stratum = Cell_Type, alluvium = Cell_Type,
+            y = Freq,
+            fill = Cell_Type, label = Cell_Type
+        )
+    ) +
+        scale_x_discrete(expand = c(.1, .1)) +
+        scale_fill_manual(values = col_vectors[1:length(unique(Neuron.combined@meta.data$Cell_Type))]) +
+        geom_flow() +
+        geom_stratum(
+            stat = "alluvium",
+            color = "darkgray"
+        ) +
+        theme(legend.position = "right", axis.line = element_blank(), panel.background = element_blank()) +
+        ggtitle("Frequency of cells in different conditions")
+}) %>% patchwork::wrap_plots(ncol = 2, guides = "collect")
+
+
+ggsave(filename = "../02.figures/FigS11A.pdf", width = 8, height = 6, plot = FigS11A)
+```
+
+
+# FigS11B
+```{r fig.height=5, fig.width=4.5}
+barplot_per <- function(seob, colValues = brewer.pal(7, "RdBu"), Cell_Type = "Cell_Type", rev = TRUE,
+                        levels = c(
+                            "26dpi_F", "22dpi_F", "18dpi_F", "14dpi",
+                            "18dpi_M", "22dpi_M", "26dpi_M"
+                        )) {
+    df <- data.frame(cluster = seob@meta.data[[Cell_Type]], day = seob@meta.data[["orig.ident"]], seob@reductions$umap@cell.embeddings, Cell_type = seob@meta.data[[Cell_Type]])
+    if (rev) {
+        df$cluster <- factor(as.character(df$cluster), levels = rev(levels(df$cluster)))
+    }
+    bar_plot <- function(df, position = "stack") {
+        df_bar <- with(df, table(cluster, day))
+        df_bar <- as.data.frame(prop.table(df_bar, 1) * 100) # %>%
+        df_bar$day <- factor(df_bar$day, levels = levels)
+
+        p <- ggplot(df_bar, aes(fill = day, y = Freq, x = cluster))
+        p <- p + geom_bar(stat = "identity", position = position, width = 0.8) + labs(fill = "Day")
+        p <- p + theme(panel.background = element_blank()) + scale_fill_manual(values = colValues) +
+            xlab("Clusters") +
+            ylab("Percentage(%)") +
+            ggtitle("Composition(%) of Clusters by Time") +
+            theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = .5))
+        return(p)
+    }
+    bar_plot(df)
+}
+
+FigS11B <- barplot_per(Neuron.combined, colValues = c(
+    "#B2182B", "#EF8A62", "#FDDBC7", "#D1E5F0", "#67A9CF", "#2166AC"
+), levels = c(
+    "26dpi_F", "22dpi_F", "18dpi_F",
+    "18dpi_M", "22dpi_M", "26dpi_M"
+), rev = F) + xlab("") + coord_flip()
+FigS11B_flip <- FigS11B + RotatedAxis()
+ggsave("../02.figures/FigS11B.pdf", width = 6.8, height = 3.3, plot = FigS11B_flip)
+```
+
+
+
+# Trajectory_inference(male)
+```{r}
+# Male
+sub_Male_seob_neuron <- Male_seob_neuron
+
+sub_Male_seob_neuron@meta.data <- sub_Male_seob_neuron@meta.data %>%
+    mutate(ClusterLabel = case_when(
+        Cell_Type_New %in% c("N3.1 Neuron", "N3.2 Neuron") ~ "N3 Neuron", # combined N3.1 and N3.2 -> N3 Neuron
+        TRUE ~ as.character(Cell_Type_New)
+    ))
+
+sce_sub_male_neuron <- as.SingleCellExperiment(sub_Male_seob_neuron, assay = "RNA")
+
+sce_sub_male_neuron <- slingshot(
+    sce_sub_male_neuron,
+    reducedDim = "UMAP",
+    clusterLabels = "ClusterLabel",
+    start.clus = "Neuron progenitor", thresh = 0.05
+)
+```
+
+# FigS12a
+```{r fig.height=6, fig.width=8}
+FigS12a <- DimPlot(Male_seob_neuron,
+    reduction = "umap", # pca, umap, tsne
+    group.by = "Cell_Type_New",
+    repel = T,
+    # group.by  = "seurat_clusters",
+    # split.by = 'sample',label.size = 4,
+    label = T
+) +
+    scale_color_manual(values = col_vectors[1:length(unique(Male_seob_neuron@meta.data$Cell_Type_New))]) +
+    theme(panel.border = element_rect(fill = NULL, linewidth = 1, colour = "black")) +
+    ggtitle(label = "UMAP of Neuron cells(male)")
+
+ggsave("../02.figures/FigS12a.pdf", width = 8, height = 6, plot = FigS12a)
+FigS12a
+```
+
+# FigS12b
+```{r}
+FigS12b <- plot_slingshot(SlingshotDataSet(sce_sub_male_neuron), show_arrow = T) + theme_pubr(legend = "right", border = T)
+ggsave("../02.figures/FigS12b.pdf", width = 8, height = 6, plot = FigS12b)
+FigS12b
+```
+
+
+# FigS12c
+```{r fig.height=5, fig.width=10}
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+library(smplot2)
+
+metadata_neuron_male <- colData(sce_sub_male_neuron)
+sds <- SlingshotDataSet(sce_sub_male_neuron)
+if (length(sds@lineages) > 1) {
+    pdt_agg1 <- apply(slingPseudotime(sds)[, c(1:length(sds@lineages))], 1, function(t) mean(t, na.rm = T))
+} else {
+    pdt_agg1 <- slingPseudotime(sds)
+}
+metadata_neuron_male$pseudotime <- pdt_agg1
+
+dat <- data.frame(
+    TimePoint = metadata_neuron_male$sample,
+    pseudotime = metadata_neuron_male$pseudotime
+)
+
+mean_data <- dat %>%
+    group_by(TimePoint) %>%
+    summarise(mean_pseudotime = mean(pseudotime, na.rm = TRUE), .groups = "drop")
+
+gradient_colors <- c(
+    "#5E4FA2", "#3288BD", "#66C2A5", "#ABDDA4", "#E6F598", "#FEE08B",
+    "#FDAE61", "#F46D43", "#D53E4F", "#9E0142"
+)
+
+FigS12c <- ggplot(dat, aes(x = pseudotime, y = TimePoint, fill = after_stat(x))) +
+    geom_density_ridges_gradient(scale = 1.1, alpha = 0.1) +
+    geom_segment(
+        data = mean_data,
+        aes(
+            x = mean_pseudotime, xend = mean_pseudotime,
+            y = as.numeric(as.factor(TimePoint)),
+            yend = as.numeric(as.factor(TimePoint)) + 0.2
+        ),
+        color = "black", size = 0.8, inherit.aes = FALSE
+    ) +
+    scale_fill_gradientn(colors = gradient_colors, name = "Pseudotime") +
+    # geom_point(data = mean_data, aes(x = mean_pseudotime, y = TimePoint),
+    #            color = 'black', size = 1, shape = 21, fill = 'black',
+    #            stroke = 0, inherit.aes = FALSE) +
+    scale_fill_gradientn(colors = gradient_colors, name = "Pseudotime") +
+    ggtitle("Pseudotime Distribution by Sampes") +
+    labs(x = "Pseudotime", y = "TimePoint") +
+    ggpubr::theme_pubr(border = T, legend = "right")
+ggsave("../02.figures/FigS12c.pdf", width = 6, height = 3, plot = FigS12c)
+```
+
+
+# Trajectory_inference(female)
+```{r}
+# Female
+sub_Female_seob_neuron <- Female_seob_neuron
+sub_Female_seob_neuron@meta.data <- sub_Female_seob_neuron@meta.data %>%
+    mutate(ClusterLabel = case_when(
+        Cell_Type_New %in% c("N3.1 Neuron") ~ "N3 Neuron",
+        TRUE ~ as.character(Cell_Type_New)
+    ))
+
+sce_sub_female_neuron <- as.SingleCellExperiment(sub_Female_seob_neuron, assay = "RNA")
+
+sce_sub_female_neuron <- slingshot(
+    sce_sub_female_neuron,
+    reducedDim = "UMAP",
+    clusterLabels = "ClusterLabel",
+    start.clus = "Neuronal progenitor", thresh = 0.05, stretch = 0.2
+) # ,stretch = 0.01, shrink = 1
+```
+
+
+# FigS13a
+```{r fig.height=6, fig.width=8}
+FigS13a <- DimPlot(Female_seob_neuron,
+    reduction = "umap", # pca, umap, tsne
+    group.by = "Cell_Type_New",
+    repel = T,
+    # group.by  = "seurat_clusters",
+    # split.by = 'sample',label.size = 4,
+    label = T
+) +
+    scale_color_manual(values = col_vectors[1:length(unique(Female_seob_neuron@meta.data$Cell_Type_New))]) +
+    theme(panel.border = element_rect(fill = NULL, linewidth = 1, colour = "black")) +
+    ggtitle(label = "UMAP of Neuron cells(male)")
+
+ggsave("../02.figures/FigS13a.pdf", width = 8, height = 6, plot = FigS13a)
+FigS13a
+```
+
+
+
+
+# FigS13b
+```{r}
+sds_female_neuron <- SlingshotDataSet(sce_sub_female_neuron)
+sds <- sds_female_neuron
+test <- data.frame(reducedDims(sds))
+pdt_agg1 <- apply(slingPseudotime(sds)[, c(1:length(sds@lineages))], 1, function(t) mean(t, na.rm = T))
+
+test$pseudotime <- pdt_agg1
+p <- ggscatter(test, x = "UMAP_1", y = "UMAP_2", color = "pseudotime", size = 0.8) +
+    gradient_color(palette = rev(brewer.pal(11, "Spectral")[-6])) +
+    theme_pubr(border = T)
+
+curves <- slingCurves(sds, as.df = TRUE)
+
+curves <- curves[!curves$Lineage %in% c(2, 3), ]
+arrow_style <- arrow(type = "closed", length = unit(0.1, "inches"))
+
+FigS13b <- p + geom_path(
+    data = curves %>% arrange(Order),
+    aes(group = Lineage), show.legend = T, arrow = arrow_style
+) + theme_pubr(legend = "right", border = T)
+
+
+ggsave("../02.figures/FigS13b.pdf", width = 8, height = 6, plot = FigS13b)
+
+FigS13b
+```
+
+
+# FigS13c
+```{r fig.height=5, fig.width=10}
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+library(smplot2)
+
+metadata_neuron_female <- colData(sce_sub_female_neuron)
+sds <- SlingshotDataSet(sce_sub_female_neuron)
+if (length(sds@lineages) > 1) {
+    pdt_agg1 <- apply(slingPseudotime(sds)[, c(1:length(sds@lineages))], 1, function(t) mean(t, na.rm = T))
+} else {
+    pdt_agg1 <- slingPseudotime(sds)
+}
+metadata_neuron_female$pseudotime <- pdt_agg1
+
+
+
+
+dat <- data.frame(
+    TimePoint = metadata_neuron_female$sample,
+    pseudotime = metadata_neuron_female$pseudotime
+)
+
+mean_data <- dat %>%
+    group_by(TimePoint) %>%
+    summarise(mean_pseudotime = mean(pseudotime, na.rm = TRUE), .groups = "drop")
+
+gradient_colors <- c(
+    "#5E4FA2", "#3288BD", "#66C2A5", "#ABDDA4", "#E6F598", "#FEE08B",
+    "#FDAE61", "#F46D43", "#D53E4F", "#9E0142"
+)
+
+FigS13c <- ggplot(dat, aes(x = pseudotime, y = TimePoint, fill = after_stat(x))) +
+    geom_density_ridges_gradient(scale = 1.1, alpha = 0.1) +
+    # 添加均值线
+    geom_segment(
+        data = mean_data,
+        aes(
+            x = mean_pseudotime, xend = mean_pseudotime,
+            y = as.numeric(as.factor(TimePoint)),
+            yend = as.numeric(as.factor(TimePoint)) + 0.2
+        ),
+        color = "black", size = 0.8, inherit.aes = FALSE
+    ) +
+    # # 添加均值点
+    # geom_point(data = mean_data, aes(x = mean_pseudotime, y = TimePoint),
+    #            color = 'black', size = 1, shape = 21, fill = 'black',
+    #            stroke = 0, inherit.aes = FALSE) +
+    scale_fill_gradientn(colors = gradient_colors, name = "Pseudotime") +
+    ggtitle("Pseudotime Distribution by Sampes") +
+    labs(x = "Pseudotime", y = "TimePoint") +
+    ggpubr::theme_pubr(border = T, legend = "right")
+ggsave("../02.figures/FigS13c.pdf", width = 6, height = 3, plot = FigS13c)
+```
+
+
+
+
+# FigS14b
+
+
+
+```{r}
+DefaultAssay(Neuron.combined) <- "RNA"
+sce <- as.SingleCellExperiment(Neuron.combined)
+
+# add logcounts
+sce <- logNormCounts(sce)
+
+# for this exercise, we focus on 3000 highly variable genes (for computational efficiency)
+dec.sce <- modelGeneVar(sce)
+hvg.genes <- getTopHVGs(dec.sce, n = 3000)
+sce <- sce[hvg.genes, ]
+
+# add UMAPs
+set.seed(32)
+umaps <- Neuron.combined@reductions$umap@cell.embeddings # as.data.frame(uwot::umap(reducedDim(sce , "pca.corrected")))
+# let's store UMAPs - we will use them for visualisation
+reducedDim(sce, "UMAP") <- umaps
+# plot UMAPs, colored by cell types
+umaps <- cbind(as.data.frame(colData(sce)), reducedDim(sce, "UMAP"))
+# p + geom_density_2d_filled(contour_var = "ndensity")
+```
+
+
+```{r}
+reducedDim(sce, "pca.corrected") <- Neuron.combined@reductions$pca@cell.embeddings
+stat_k <- estimate_neighbourhood_sizes(sce,
+    k_grid = seq(10, 40, 5),
+    order = 2, prop = 0.1, filtering = TRUE,
+    reducedDim_name = "pca.corrected", plot_stat = TRUE
+)
+```
+
+
+
+```{r}
+set.seed(32)
+sce_milo <- assign_neighbourhoods(sce,
+    k = 25, order = 2,
+    filtering = TRUE, reducedDim_name = "pca.corrected", verbose = F
+)
+
+colData(sce_milo)$Time <- stringr::str_sub(colData(sce_milo)$sample, start = 1L, end = 5L)
+```
+
+
+```{r}
+add_da <- function(sce_milo,
+                   reducedDim_name,
+                   sample_id = "sample",
+                   condition_id,
+                   col_annotate = NULL,
+                   covariates = NULL) {
+    require(dplyr)
+    require(miloR)
+    coldata <- as.data.frame(colData(sce_milo))
+    sce_milo$condition_id <- as.factor(coldata[, condition_id])
+    sce_milo$sample_id <- as.factor(coldata[, sample_id])
+
+    sce_milo <- countCells(sce_milo, meta.data = as.data.frame(colData(sce_milo)), samples = "sample_id")
+    sce_design <- data.frame(colData(sce_milo))[, c("sample_id", "condition_id", covariates)]
+    sce_design <- distinct(sce_design)
+    rownames(sce_design) <- sce_design$sample_id
+    nhoodCounts(sce_milo) <- as.matrix(nhoodCounts(sce_milo), "dgCMatrix")
+
+    if (!is.null(covariates)) {
+        da_results <- tryCatch(
+            {
+                out <- testNhoods(sce_milo, design = as.formula(paste("~ ", paste(covariates, collapse = "+"), sep = "", " + condition_id")), design.df = sce_design, fdr.weighting = "graph-overlap", reduced.dim = reducedDim_name)
+            },
+            error = function(dummy) {
+                out <- testNhoods(sce_milo, design = ~ factor(condition_id), design.df = sce_design, fdr.weighting = "graph-overlap", reduced.dim = reducedDim_name)
+                out$logFC <- NaN
+                out$logCPM <- NaN
+                out[, "F"] <- NaN
+                out$PValue <- NaN
+                out$FDR <- NaN
+                out$SpatialFDR <- NaN
+                return(out)
+            }
+        )
+    } else {
+        da_results <- testNhoods(sce_milo, design = ~ factor(condition_id), design.df = sce_design, fdr.weighting = "graph-overlap", reduced.dim = reducedDim_name)
+    }
+    if (!is.null(col_annotate)) {
+        da_results <- annotateNhoods(sce_milo, da_results, coldata_col = col_annotate)
+    }
+    da_results <- da_results[order(da_results$Nhood), ]
+    return(da_results)
+}
+```
+
+
+```{r}
+# sce_milo <- countCells(sce_milo, meta.data = as.data.frame(colData(sce_milo)), sample="sample")
+da_results <- add_da(sce_milo, reducedDim_name = "pca.corrected", condition_id = "Sex", col_annotate = "Cell_Type", covariates = "Time", sample_id = "sample")
+```
+
+
+```{r}
+library(igraph)
+myPlotNG <- function(
+    x, layout = "UMAP", colour_by = NA, subset.nhoods = NULL, edge_colour = "lightgrey", edge_alpha = 0.2,
+    size_range = c(0.5, 3), node_stroke = 0.3, ...) {
+    if (!miloDE:::.valid_graph(nhoodGraph(x))) {
+        stop("Not a valid Milo object - neighbourhood graph is missing. Please run buildNhoodGraph() first.")
+    }
+    if (is.character(layout)) {
+        if (!layout %in% names(reducedDims(x))) {
+            stop(layout, "isn't in readucedDim(x) - choose a different layout")
+        }
+    }
+    nh_graph <- nhoodGraph(x)
+    if (!is.null(subset.nhoods)) {
+        nh_graph <- igraph::induced_subgraph(nh_graph, vids = which(as.numeric(V(nh_graph)$name) %in%
+            unlist(nhoodIndex(x)[subset.nhoods])))
+    }
+    nh_graph <- igraph::permute(nh_graph, order(igraph::vertex_attr(nh_graph)$size,
+        decreasing = TRUE
+    ))
+    if (is.character(layout)) {
+        redDim <- layout
+        layout <- reducedDim(x, redDim)[as.numeric(igraph::vertex_attr(nh_graph)$name), ]
+        if (!any(class(layout) %in% c("matrix"))) {
+            warning("Coercing layout to matrix format")
+            layout <- as(layout, "matrix")
+        }
+    }
+    if (!is.na(colour_by)) {
+        if (colour_by %in% colnames(colData(x))) {
+            col_vals <- colData(x)[
+                as.numeric(igraph::vertex_attr(nh_graph)$name),
+                colour_by
+            ]
+            if (!is.numeric(col_vals)) {
+                col_vals <- as.character(col_vals)
+            }
+            V(nh_graph)$colour_by <- col_vals
+        } else {
+            stop(colour_by, "is not a column in colData(x)")
+        }
+    } else {
+        V(nh_graph)$colour_by <- V(nh_graph)$size
+        colour_by <- "Nhood size"
+    }
+    if (colour_by %in% c("logFC")) {
+        plot.g <- simplify(nh_graph)
+        pl <- ggraph(simplify(nh_graph), layout = layout) + geom_edge_link0(aes(width = weight),
+            edge_colour = edge_colour, edge_alpha = edge_alpha
+        ) + geom_node_point(aes(
+            fill = colour_by,
+            size = size
+        ), shape = 21, stroke = node_stroke) +
+            scale_size(range = size_range, name = "Nhood size") +
+            scale_edge_width(range = c(0.2, 3), name = "overlap size") +
+            theme_classic(base_size = 14) + theme(
+                axis.line = element_blank(),
+                axis.text = element_blank(), axis.ticks = element_blank(),
+                axis.title = element_blank()
+            )
+    } else {
+        pl <- ggraph(simplify(nh_graph), layout = layout) + geom_edge_link0(aes(width = weight),
+            edge_colour = edge_colour, edge_alpha = edge_alpha
+        ) + geom_node_point(aes(
+            fill = colour_by,
+            size = size
+        ), shape = 21, stroke = node_stroke) +
+            scale_size(range = size_range, name = "Nhood size") +
+            scale_edge_width(range = c(0.2, 3), name = "overlap size") +
+            theme_classic(base_size = 14) + theme(
+                axis.line = element_blank(),
+                axis.text = element_blank(), axis.ticks = element_blank(),
+                axis.title = element_blank()
+            )
+    }
+    if (is.numeric(V(nh_graph)$colour_by)) {
+        pl <- pl + scale_fill_gradient2(name = colour_by)
+    } else {
+        mycolors <- colorRampPalette(brewer.pal(11, "Spectral"))(length(unique(V(nh_graph)$colour_by)))
+        pl <- pl + scale_fill_manual(
+            values = mycolors, name = colour_by,
+            na.value = "white"
+        )
+    }
+    pl
+}
+
+myPlotNG_DA <- function(x, milo_res, alpha = 0.05, res_column = "logFC", ...) {
+    if (!miloDE:::.valid_graph(nhoodGraph(x))) {
+        stop("Not a valid Milo object - neighbourhood graph is missing. Please run buildNhoodGraph() first.")
+    }
+    if (is.character(layout)) {
+        if (!layout %in% names(reducedDims(x))) {
+            stop(layout, "is not in readucedDim(x) - choose a different layout")
+        }
+    }
+    signif_res <- milo_res
+    signif_res[signif_res$SpatialFDR > alpha, res_column] <- 0
+    colData(x)[res_column] <- NA
+    colData(x)[unlist(nhoodIndex(x)[signif_res$Nhood]), res_column] <- signif_res[
+        ,
+        res_column
+    ]
+    myPlotNG(x, colour_by = res_column, ...)
+}
+```
+
+
+# FigS14b_1
+```{r fig.height = 5.5,fig.width = 13.8}
+FigS14b_1 <- myPlotNG_DA(sce_milo, da_results, layout = "UMAP", alpha = 0.8, linewith = 0.01, size_range = c(0.5, 6.8), node_stroke = 0.5) +
+    scale_fill_gradient2(
+        name = "logFC", high = "blue4", mid = "white",
+        low = scales::muted("red3"), midpoint = 0, space = "Lab", na.value = "grey50"
+    ) +
+    theme(
+        panel.border = element_rect(fill = NA, linewidth = 1, colour = "black")
+    )
+FigS14b_1
+```
+
+
+```{r}
+library(colorspace)
+
+myPlotBee <- function(sce_milo,
+                      da_results,
+                      SpatialFDR = 0.2, logFC_cutoff = 0.5,
+                      colData_colum = "Cell_Type") {
+    da_results <- annotateNhoods(sce_milo, da_results, coldata_col = colData_colum)
+
+    da_results[[colData_colum]] <- ifelse(da_results[[paste0(colData_colum, "_fraction")]] < 0.5, "Mixed", da_results[[colData_colum]])
+
+    da.res <- mutate(da_results, group_by = da_results[[colData_colum]]) %>%
+        mutate(is_signif = ifelse(SpatialFDR < SpatialFDR, 1, 0)) %>%
+        mutate(logFC_color = ifelse(is_signif == 1, logFC, NA)) %>%
+        arrange(group_by) %>%
+        mutate(Nhood = factor(Nhood, levels = unique(Nhood))) %>%
+        mutate(
+            logFC_color_category = case_when(
+                SpatialFDR < SpatialFDR & logFC > 0 ~ "Enriched in male",
+                SpatialFDR < SpatialFDR & logFC < 0 ~ "Enriched in female",
+                TRUE ~ "Not Signif"
+            )
+        )
+
+    cluster.levels <- da.res %>%
+        group_by(!!sym(colData_colum)) %>%
+        summarise(
+            mean_logFC = mean(logFC, na.rm = TRUE),
+            min_FDR = min(FDR, na.rm = T)
+        ) %>%
+        arrange(desc(mean_logFC))
+
+    da.res[[colData_colum]] <- factor(da.res[[colData_colum]], levels = cluster.levels[[colData_colum]])
+
+    change.levels <- case_when(
+        cluster.levels$mean_logFC > logFC_cutoff & cluster.levels$min_FDR < SpatialFDR ~ "Up",
+        cluster.levels$mean_logFC < -logFC_cutoff & cluster.levels$min_FDR < SpatialFDR ~ "Down",
+        TRUE ~ NA
+    )
+
+    names(change.levels) <- cluster.levels[[colData_colum]]
+
+    orig.da <- data.frame(
+        "Cluster" = cluster.levels[[colData_colum]],
+        "Direction" = change.levels[cluster.levels[[colData_colum]]]
+    )
+    orig.da$start <- ifelse(orig.da$Direction == "Up", 0, 1)
+    orig.da$end <- ifelse(orig.da$Direction == "Down", 0, 1)
+
+    orig.da$Cluster <- factor(orig.da$Cluster, levels = cluster.levels[[colData_colum]])
+
+    milo.arrow <- ggplot(orig.da, aes(x = Cluster, y = start, xend = Cluster, yend = end, colour = Direction)) +
+        geom_segment() +
+        geom_segment(size = 0.8, arrow = arrow(length = unit(0.1, "npc"), type = "closed")) +
+        coord_flip() +
+        theme_bw() +
+        scale_colour_manual(
+            values = c(darken("blue"), darken("#ff0000")), breaks = c("Up", "Down"),
+            labels = c("Enriched in male", "Enriched with female")
+        ) +
+        guides(colour = guide_legend(ncol = 1, title = "DA direction")) +
+        facet_grid(Cluster ~ ., scales = "free_y", space = "free") +
+        labs(x = "Different cell type") +
+        theme(
+            strip.text.y = element_blank(), strip.text.x = element_text(angle = 90),
+            plot.margin = unit(c(0, 0, 0, 0), "cm"), panel.grid = element_blank(),
+            axis.title.x = element_blank(), axis.text.x = element_blank(),
+            axis.ticks.x = element_blank(), axis.text.y = element_blank(),
+            axis.title.y = element_text(size = 12),
+            legend.text = element_text(size = 12), legend.title = element_text(size = 12),
+            legend.position = "bottom"
+        )
+
+    lim.val <- max(abs(da.res$logFC))
+    eps <- lim.val / 25
+
+    milo.bee <- ggplot(da.res, mapping = aes_string(x = colData_colum, y = "logFC")) +
+        geom_quasirandom(
+            data = da.res[da.res$SpatialFDR > SpatialFDR, ],
+            alpha = 1, colour = "grey50", size = 2
+        ) +
+        geom_quasirandom(
+            data = da.res[da.res$SpatialFDR <= SpatialFDR, ],
+            aes(colour = logFC), size = 2.5
+        ) +
+        coord_flip() +
+        facet_grid(as.formula(paste(colData_colum, "~ .")), scales = "free_y", space = "free") +
+        scale_colour_gradient2(
+            high = darken("blue"), mid = "grey80", low = darken("#ff0000"),
+            midpoint = 0
+        ) +
+        scale_y_continuous(limits = c(-lim.val - eps, lim.val + eps)) +
+        theme_bw() +
+        labs(y = "Log Fold Change") +
+        theme(
+            strip.text.y = element_text(angle = 0, colour = "black", size = 12),
+            strip.background = element_rect(colour = "white", fill = "white"),
+            axis.title.y = element_blank(), axis.text.y = element_blank(),
+            axis.text.x = element_text(size = 12), axis.title.x = element_text(size = 12),
+            axis.ticks.y = element_blank()
+        ) +
+        guides(colour = FALSE)
+
+    Fig <- milo.arrow + milo.bee +
+        plot_layout(widths = c(1, 8), guides = "collect") & theme(legend.position = "top", legend.justification = 0)
+    Fig
+}
+```
+
+
+# FigS14b_2
+```{r fig.height=7.2, fig.width=5, message=FALSE}
+FigS14b_2 <- myPlotBee(sce_milo = sce_milo, da_results = da_results, colData_colum = "Cell_Type", SpatialFDR = 0.2, logFC_cutoff = 1)
+ggsave("../02.figures/FigS14b_2.pdf", width = 5, height = 8.5, plot = FigS14b_2)
+```
+
+
+
+
+# FigS15
+```{r fig.height=5*1.1, fig.width=10.8*1.1}
+Idents(Neuron.combined) <- Neuron.combined$Cell_Type
+DefaultAssay(Neuron.combined) <- "RNA"
+
+ids <- c(
+    "Sjc-0008047", "Sjc-0001899",
+    "Sjc-0005862", "Sjc-0003224",
+    "Sjc-0000414", "Sjc-0002096",
+    "Sjc-0004026", "Sjc-0004639",
+    "Sjc-0001159", "Sjc-0006688",
+    "Sjc-0002874", "Sjc-0006098",
+    "Sjc-0001532", "Sjc-0000442",
+    "Sjc-0003328", "Sjc-0003596",
+    "Sjc-0006005", "Sjc-0009496",
+    "Sjc-0000143", "Sjc-0007481",
+    "Sjc-0006063", "Sjc-0008752",
+    "Sjc-0000798", "Sjc-0000815", "Sjc-0002320",
+    "Sjc-0003262", "Sjc-0004057", "Sjc-0003639",
+    "Sjc-0002429", "Sjc-0001237", "Sjc-0006108", "Sjc-0001200",
+    "Sjc-0003345", "Sjc-0006850",
+    "Sjc-0004182", "Sjc-0005751",
+    "Sjc-0000820", "Sjc-0003404",
+    "Sjc-0000814", "Sjc-0006754",
+    "Sjc-0006669", "Sjc-0004903",
+    "Sjc-0000744", "Sjc-0002008", "Sjc-0001267"
+)
+ID2NAME_new["Sjc-0001267", ]$new_gene_name <- "Sjc_0001267(7b2)"
+custom_gene_names <- ID2NAME_new[ids, ]$new_gene_name
+
+FigS15 <- DotPlot(Neuron.combined, assay = "RNA", features = ids) + RotatedAxis() +
+    theme_pubr(border = T) + RotatedAxis() +
+    theme(
+        axis.text = element_text(size = 10, hjust = 1),
+        panel.border = element_rect(fill = NULL, linewidth = 1, colour = "black")
+    ) + scale_colour_gradientn(colours = c("grey", rev(brewer.pal(n = 11, name = "Spectral"))[-1])) +
+    RotatedAxis() + xlab("") + ylab("") +
+    scale_x_discrete(labels = custom_gene_names)
+
+ggsave("../02.figures/FigS15.pdf", width = 10.8 * 1.1, height = 5 * 1.1, plot = FigS15)
+```
+
+
+# export for RNA velocity
+```{r}
+Female_seob_neuron$Cell_Type_pre <- Female_seob_neuron$Cell_Type
+Female_seob_neuron$Cell_Type <- Female_seob_neuron$Cell_Type_New
+Male_seob_neuron$Cell_Type_pre <- Male_seob_neuron$Cell_Type
+Male_seob_neuron$Cell_Type <- Male_seob_neuron$Cell_Type_New
+
+
+save_filesFORscVelo(Female_seob_neuron, filename = "Female_seob_neuron", baseDIR = "../04.velocity/")
+save_filesFORscVelo(Male_seob_neuron, filename = "Male_seob_neuron", baseDIR = "../04.velocity/")
+```

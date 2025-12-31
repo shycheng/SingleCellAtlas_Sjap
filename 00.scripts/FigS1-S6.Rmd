@@ -1,0 +1,304 @@
+```{r}
+suppressPackageStartupMessages({
+  library(scCustomize)
+  library(patchwork)
+  library(reshape2)
+  library(networkD3)
+  library(dplyr)
+  library(magrittr)
+})
+
+```
+
+```{r}
+seob <- readRDS("~/data/seob_dim100_20210524_res2.rds")
+```
+
+# FigS1a
+```{r fig.height=6.88*1.2, fig.width=7.2*1.2}
+
+seob@meta.data$label_cls <- as.numeric(as.character(seob@meta.data$label_cls))
+
+umap_cls <- DimPlot(seob,group.by = "label_cls" ,#'label_cls',
+                    raster = F,
+                    label = T,label.size = 3,
+                    repel = T) + 
+  scale_color_manual(values = c(col_vector,"#A50F15","grey")) + NoLegend() + 
+  theme(panel.border = element_rect(fill = NA,linewidth = 1,colour = 'black')) + 
+  ggtitle(label = "UMAP of 104671 cells(color by clusters)")
+
+ggsave("../02.figures/FigS1/FigS1a.pdf",width = 7.2,height = 6.88,plot = umap_cls)
+
+```
+
+# FigS1b
+
+```{r}
+
+cls2cell <- seob@meta.data[,c('newcls','Cell_Type')]
+
+cls2cell <- seob@meta.data %>% arrange(Cell_Type,newcls) %>% 
+  distinct(newcls,.keep_all = T) %>% 
+  select(Cell_Type,newcls) %>% 
+  mutate(value = 1)
+
+
+
+
+links <- cls2cell[,c('newcls','Cell_Type','value')]
+colnames(links) <- c("source", "target", "value")
+
+node <- unique(c(as.character(links$source),as.character(links$target)))
+node_df <- data.frame(node = 0:(length(node) -1 ),name = node)
+
+links <- merge(x = links,y = node_df,by.x = "source", by.y = "name")
+links<- merge(links,node_df,by.x = "target", by.y = "name")
+links <- links[ , c("node.x", "node.y", "value")]
+colnames(links) <- c("source", "target", "value")
+
+node_df$color <- c(c(col_vector,"#A50F15","grey" ),c("#7FC97F", "#BEAED4", brewer.pal(4,'Oranges'), "#D95F02", "#7570B3",
+                                             brewer.pal(5,'Blues'),"#E7298A","#1F78B4", "#B2DF8A",
+                                             "#33A02C", "#FB9A99", "#E31A1C", "#A50F15","grey" )
+                   #c(col_vector,"#A50F15")
+)
+
+node_df$group <- paste0("r",1:nrow(node_df))
+colour_scale <- sprintf("d3.scaleOrdinal().domain(%s).range(%s)",
+                        jsonlite::toJSON(node_df$group),
+                        jsonlite::toJSON(node_df$color))
+
+network_sankey <- networkD3::sankeyNetwork(Links = links, 
+                                           Nodes = node_df, 
+                                           Source = 'source',
+                                           Target = 'target', 
+                                           Value = 'value', 
+                                           NodeID = 'name',
+                                           units = 'value', 
+                                           sinksRight = F, 
+                                           NodeGroup = 'group',
+                                           fontSize = 12,
+                                           fontFamily = "Times new roman",
+                                           colourScale = colour_scale,
+                                           height = 1800,
+                                           width = 550)
+
+htmlwidgets::saveWidget(network_sankey, file=file.path("../02.figures/FigS1/FigS1b.html"))
+
+webshot::webshot(url="../02.figures/FigS1/FigS1b.html",
+                 file=file.path("../02.figures/FigS1/FigS1b.pdf"))
+
+
+network_sankey
+```
+
+
+# FigS2
+```{r fig.height=5, fig.width=13.6}
+ids <- c(
+  "Sjc-0008087","Sjc-0001581",# old
+  "Sjc-0000705","Sjc-0006622","Sjc-0009220","Sjc-0004774","Sjc-0008219",
+  "Sjc-0003010","Sjc-0008393","Sjc-0009231","Sjc-0007561","Sjc-0008047","Sjc-0006712",
+  "Sjc-0005931","Sjc-0007590","Sjc-0003404","Sjc-0004182","Sjc-0001267","Sjc-0008945",
+  "Sjc-0002936","Sjc-0005717","Sjc-0002588",
+  "Sjc-0000576","Sjc-0001087","Sjc-0000004", # old
+  "Sjc-0000414","Sjc-0002985","Sjc-0008478","Sjc-0000277","Sjc-0000124","Sjc-0000920",
+  "Sjc-0009480","Sjc-0008416","Sjc-0007782","Sjc-0000095",
+  "Sjc-0000530","Sjc-0001895",
+  "Sjc-0000045",
+  "Sjc-0008397","Sjc-0008351","Sjc-0003576",
+  "Sjc-0001566","Sjc-0001890",
+  "Sjc-0001771"
+  
+  )
+
+DefaultAssay(seob) <- "integrated"
+dp <- DotPlot(seob, 
+                              features =ids,group.by = "Cell_Type",
+                              cols = c('lightgrey','#990000')) +
+  theme(axis.text = element_text(size = 12,hjust = 1),
+        panel.border = element_rect(fill = NA,linewidth = 1,colour = 'black')
+        )+ 
+ RotatedAxis() + 
+  xlab("")
+
+ggsave("../02.figures/FigS2.pdf",width = 13.6,height = 5,plot = dp)
+dp
+```
+
+
+# FigS3
+```{r fig.height=4, fig.width=4.5}
+ids <- c("Sjc-0003010","Sjc-0008393","Sjc-0009231","Sjc-0007561","Sjc-0005931","Sjc-0007590",
+         "Sjc-0008047","Sjc-0006712","Sjc-0005717","Sjc-0002588","Sjc-0009480","Sjc-0008416",
+         "Sjc-0007782","Sjc-0000095","Sjc-0002936","Sjc-0000530","Sjc-0000045","Sjc-0001890",
+         "Sjc-0003576","Sjc-0000176","Sjc-0002985","Sjc-0008478","Sjc-0000277","Sjc-0000124",
+         "Sjc-0000920","Sjc-0001566")
+
+#ids <- c("Sjc-0003576","Sjc-0000045")
+lapply(ids, function(id){
+  message(sprintf("Plot id:%s",id))
+  p <- FeaturePlot(seob,
+            features = id,label = F,
+            pt.size = 0.01,
+            raster = F,min.cutoff = 'q10',max.cutoff = 'q90',cols = c("grey",'#E31A1C'))  + # lightgrey
+  labs(x = "UMAP-1",y = "UMAP-2",title = "") + 
+  theme(axis.text = element_blank(),axis.ticks = element_blank(),panel.background = element_rect(fill = NA,linewidth = 1,colour = 'black'))
+  
+ggsave(sprintf("../02.figures/FigS3.pdf",id),width = 4.5*1.2,height = 4*1.2,plot = p)
+})
+
+```
+
+
+
+
+# FigS5
+## FigS5_a
+```{r fig.height=4, fig.width=3.68}
+cells_bysampleList <- split(rownames(seob@meta.data),seob@meta.data$sample)
+
+FigS5_a <- scCustomize::Cell_Highlight_Plot(seob,pt.size = 0.01,
+                                                    cells_highlight = cells_bysampleList[1],
+                                                    highlight_color = col_vector[1]) + 
+  theme_pubr(border = T) & NoAxes()
+
+ggsave(filename = "../02.figures/FigS5/FigS5_a.pdf",width = 3.68,height = 4,plot = FigS5_a)
+FigS5_a
+```
+
+## FigS5_b
+```{r fig.height=8, fig.width=11}
+FigS4_b <- map(c(2,4,6,3,5,7),function(x){
+  p <- scCustomize::Cell_Highlight_Plot(seob,pt.size = 0.01,
+                                        #raster = T,
+                                        cells_highlight = cells_bysampleList[x],
+                                        highlight_color = col_vector[x]) + 
+    theme_pubr(border = T) & NoAxes()
+  p
+}) %>% patchwork::wrap_plots(ncol = 3)
+
+
+ggsave(filename = "../02.figures/FigS5/FigS5_b.png",width = 11,height = 8,plot = FigS5_b)
+FigS5_b
+```
+
+## FigS5_c
+```{r fig.height=11.5, fig.width=15}
+
+FigS5_c <- DimPlot(seob, raster = F,
+                           reduction = "umap",
+                           group.by  = "sample",repel = T,pt.size = 0.01,
+                           label.size = 3,
+                           label = F) + 
+  scale_color_manual(values = col_vector) + 
+  theme_pubr(border = T,legend = 'right') & NoAxes()
+
+
+ggsave(filename = "../02.figures/FigS5/FigS5_c.png",width = 4.9*3,height = 3.8*3,plot = FigS5_c)
+FigS5_c
+```
+
+
+# FigS6a
+```{r}
+library(Seurat)
+library(reshape2)
+library(ggpubr)
+library(ggalluvial)
+Idents(seob) <- seob@meta.data$Cell_Type
+getCellprop_tab <- function(Seob, umap_plot, n) {
+  df <- data.frame(cluster = Seob@meta.data[["seurat_clusters"]], day = Seob@meta.data[["orig.ident"]], Seob@reductions$umap@cell.embeddings, Cell_type = Seob@meta.data$Cell_Type)
+  g1 <- ggplot_build(umap_plot)
+  color_seurat <- g1$data[[1]] %>%
+    group_by(group) %>%
+    dplyr::summarise(cols = dplyr::first(colour))
+  df_type <- with(df, table(day, Cell_type))
+  df_type <- as.data.frame(prop.table(df_type, 1) * 100)
+  df_type$cols <- rep(color_seurat$cols, each = n)
+  return(df_type)
+}
+
+seob_CellProp <- getCellprop_tab(seob, umapplot_seob, n = 7)
+seob_CellProp <- dcast(seob_CellProp[, 1:3], Cell_type ~ day) # [,c(1,5,4,3,2,6,7,8)]
+
+df <- seob@meta.data %>%
+  dplyr::select("sample", "Cell_Type") %>%
+  table()
+
+df <- as.data.frame(prop.table(df, 1) * 100)
+df$sample <- factor(df$sample, levels = c(
+  "26dpi_F", "22dpi_F", "18dpi_F", "14dpi",
+  "18dpi_M", "22dpi_M", "26dpi_M"
+))
+
+FigS6a <- ggplot(
+  df,
+  aes(
+    x = sample, stratum = Cell_Type, alluvium = Cell_Type,
+    y = Freq,
+    fill = Cell_Type, label = Cell_Type
+  )
+) +
+  scale_x_discrete(expand = c(.1, .1)) +
+  scale_fill_manual(values = c(
+    "#7FC97F", "#BEAED4", brewer.pal(4, "Oranges"), "#D95F02", "#7570B3",
+    brewer.pal(5, "Blues"), "#E7298A", "#1F78B4", "#B2DF8A",
+    "#33A02C", "#FB9A99", "#E31A1C", "#FFFF99", "grey"
+  )) +
+  geom_flow() +
+  geom_stratum(
+    stat = "alluvium",
+    color = "darkgray",
+    linewidth = 0.01
+  ) +
+  theme(
+    legend.position = "right",
+    axis.line = element_blank(),
+    panel.background = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  guides(fill = guide_legend(ncol = 1)) +
+  ggtitle("Frequency of cells in different conditions")
+
+ggsave(
+  filename = "../02.figures/FigS6a.pdf",
+  plot = FigS6a, width = 5.16, height = 6.4
+)
+FigS6a
+```
+
+
+# FigS6b
+```{r fig.height=6.76, fig.width=10.8}
+show_geneExp <- function(id,
+                         SampleList = list(
+                           Female = c("18dpi_F", "22dpi_F", "26dpi_F"),
+                           Male = c("18dpi_M", "22dpi_M", "26dpi_M")
+                         )) {
+  Plist <- imap(SampleList, ~ {
+    simFP(
+      id = id, seob = subset(seob, subset = sample %in% .x),
+      split.by = "sample",
+      pt.size = 0.05, cols = c("grey", "red"),
+      min.cutoff = "q10", max.cutoff = "q90"
+    ) &
+      theme(
+        panel.border = element_rect(fill = NA, linewidth = 1, colour = "black"),
+        plot.title = element_text(face = "italic")
+      )
+  })
+  Plist$Female / Plist$Male
+}
+
+FigS6B_a <- show_geneExp(id = "Sjc-0009220")
+ggsave(
+  filename = "../02.figures/FigS6B_a.pdf", plot = FigS6B_a,
+  width = 10.8, height = 3.38 * 2
+)
+
+FigS6B_b <- show_geneExp(id = "Sjc-0001267")
+ggsave(
+  filename = "../02.figures/FigS6B_b.pdf", plot = FigS6B_b,
+  width = 10.8, height = 3.38 * 2
+)
+```

@@ -143,6 +143,7 @@ barplot_celltype <- function(Seob,umap_plot,n){
   p = p + geom_bar(stat="identity", position='stack',width = 0.68) + labs(fill='Cell type')
   p = p + theme(panel.background=element_blank())+ scale_fill_manual(values = cols) +
     xlab('') +
+    
     ylab('Percentage(%)') +
     theme(axis.text.x = element_text(angle = 90, vjust = .5,hjust = -0.5))+ 
     ggtitle("Composition(%) of cell types by Time")
@@ -152,7 +153,7 @@ barplot_celltype <- function(Seob,umap_plot,n){
 getFeaturePlots <- function(Seobj,id){
   p <- FeaturePlot(Seobj, 
                    reduction = "umap", 
-                   features = id, 
+                   features = id, repel = T,
                    #split.by = 'Sex',label.size = 3,ncol = 2,
                    label = T,min.cutoff = "q10", max.cutoff = "q90",
                    cols = c("grey", "red")) +NoAxes() + 

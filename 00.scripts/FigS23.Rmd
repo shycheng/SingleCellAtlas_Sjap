@@ -1,0 +1,490 @@
+# 1.Lsamp RNAi RNA-seq data pre-processing 
+```{r}
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(DESeq2)
+  library(pheatmap)
+  library(ggthemes)
+  library(ggsci)
+  library(ggrepel)
+  library(tidyverse)
+  library(ggpubr)
+  library(clusterProfiler)
+  library(enrichplot)
+  library(SJDB)
+  library(org.Sjaponicum.eg.db)
+  library(edgeR)
+  library(GenomicFeatures)
+  library(FactoMineR)
+})
+```
+
+```{r}
+pheno <- readxl::read_xlsx("~/pheno.xlsx")
+```
+
+remove batch effect and PCA
+```{r fig.height=8, fig.width=15}
+pheno1 <- pheno[pheno$Design != "dpi30_d8_p12", ]
+pheno2 <- pheno[pheno$Design == "dpi30_d8_p12", ]
+
+
+pca_List <- imap(split(pheno, pheno$Design), ~ {
+  rawCounts <- CountData[, .x$Sample]
+  corrected_data <- sva::ComBat_seq(
+    counts = as.matrix(rawCounts),
+    batch = as.character(.x$Batch),
+    group = as.character(.x$Treat)
+  )
+  pca <- PCA(t(corrected_data), scale.unit = TRUE, ncp = 5)
+
+  pca_df <- data.frame(pca$ind$coord)
+  pca_df$Treat <- .x$Treat
+  pca_df$Batch <- .x$Batch
+  pca_df$name <- rownames(pca_df)
+
+  pca_plot <- ggscatter(pca_df, "Dim.1", "Dim.2", color = "Treat", size = 5, shape = "Batch", label = "name", repel = T) +
+    xlab(paste0("PC1: ", round(pca$eig[, 2][3], digits = 2), "% variance")) +
+    ylab(paste0("PC2: ", round(pca$eig[, 2][2], digits = 2), "% variance")) +
+    theme_bw(base_size = 18, base_line_size = 1) +
+    ggtitle("PCA")
+
+  res <- list(
+    pheno = .x,
+    counts = rawCounts,
+    pca_plot = pca_plot
+  )
+  return(res)
+})
+
+pca_List$dpi30_d8_p12$pca_plot + pca_List$dpi30_d8_unp$pca_plot
+
+TPM_normlize <- function(counts,
+                         version = "V3") {
+  # TPM 标准化
+  ### 获取基因非重叠外显子长度
+  if (version == "V3") {
+    txdb <- makeTxDbFromGFF(file = "/home/shycheng/genome/Schitosoma_jp/sjv3_up/annotation/genes.gtf")
+  } else if (version == "V4") {
+    txdb <- makeTxDbFromGFF(file = "/home/shycheng/genome/Schitosoma_jp/sjaV4_Hu_addmit/sjaV4_Hu_reNameChr_addmit.gtf")
+  } else {
+    print("Error,please provide genome version V3 or V4!")
+  }
+
+  # then collect the exons per gene id
+  exons.list.per.gene <- exonsBy(txdb, by = "gene")
+
+  # then for each gene, reduce all the exons to a set of non overlapping exons,
+  # calculate their lengths (widths) and sum then
+  exonic.gene.sizes <- sum(width(GenomicRanges::reduce(exons.list.per.gene)))
+
+  ### TPM标准化公式
+  r_tpm <- function(dfr, len) {
+    dfr1 <- sweep(dfr, MARGIN = 1, (len / 10^4), `/`)
+    scf <- colSums(dfr1) / (10^6)
+    return(sweep(dfr1, 2, scf, `/`))
+  }
+
+  TPM <- r_tpm(counts, exonic.gene.sizes[rownames(counts)])
+  return(TPM)
+}
+
+
+
+split_PCA <- function(CountData, pheno, split_By) {
+  pca_plotList <- imap(split(pheno, pheno[[split_By]]), ~ {
+    tpm_mat <- TPM_normlize(CountData[, .x$Sample])
+    pca <- PCA(t(tpm_mat), scale.unit = TRUE, ncp = 5)
+    pca_df <- data.frame(pca$ind$coord)
+    pca_df$Treat <- .x$Treat
+    pca_df$name <- rownames(pca_df)
+
+    pca_plot <- ggscatter(pca_df, "Dim.1", "Dim.2", color = "Treat", size = 5, label = "name", repel = T) +
+      xlab(paste0("PC1: ", round(pca$eig[, 2][3], digits = 2), "% variance")) +
+      ylab(paste0("PC2: ", round(pca$eig[, 2][2], digits = 2), "% variance")) +
+      theme_bw(base_size = 18, base_line_size = 1) +
+      ggtitle("PCA")
+    return(pca_plot)
+  })
+  pca_plotList
+}
+
+plist <- split_PCA(CountData, pheno, "Batch")
+
+plist %>% patchwork::wrap_plots(ncol = 3, guides = "collect")
+```
+
+
+
+```{r}
+check_phenoTab <- function(pheno) {
+  required_cols <- c("Sample", "Condition")
+  if (all(required_cols %in% colnames(pheno))) {
+    message("Pheno info looks good.")
+  } else {
+    missing_cols <- required_cols[!required_cols %in% colnames(pheno)]
+    stop("Missing required columns in pheno data frame: ", paste(missing_cols, collapse = ", "))
+  }
+}
+
+
+# 定义Assay类
+setClass(
+  "Assay",
+  slots = c(
+    counts = "data.frame",
+    tpm = "data.frame",
+    deseq2 = "data.frame"
+  )
+)
+
+# 定义Assay的构造函数
+Assay <- function(counts) {
+  # 验证counts是否为data.frame
+  if (!is(counts, "data.frame")) {
+    stop("'counts' must be a data.frame")
+  }
+  # 创建Assay对象，其中tpm和deseq2是空的data.frames
+  new("Assay", counts = counts, tpm = data.frame(), deseq2 = data.frame())
+}
+
+
+# 定义一个名为Person的S4类，它有三个属性：Assay 类 , pheno 和 outDir
+
+setClass(
+  "RNASeqOBJ",
+  slots = c(
+    assay = "Assay",
+    pheno = "data.frame",
+    outDir = "character",
+    dds = "ANY",
+    contrast_df = "data.frame",
+    diffres = "list"
+  ),
+  validity = function(object) {
+    if (!is.null(object@dds) && !inherits(object@dds, "DESeqDataSet")) {
+      return("Slot 'dds' must be NULL or an object of class 'DESeqDataSet'")
+    }
+    TRUE
+  }
+)
+
+
+createDirectories <- function(outDir) {
+  dirsToCreate <- c("Summary")
+  for (dirName in dirsToCreate) {
+    dirPath <- file.path(outDir, dirName)
+    if (!dir.exists(dirPath)) {
+      dir.create(dirPath, recursive = T)
+    }
+  }
+}
+
+RNASeqOBJ <- function(counts, pheno = data.frame(), outDir = "./") {
+  # Check for pheno validity
+  check_phenoTab(pheno)
+
+  # Create directories
+  message(sprintf("Files will be saved to %s", outDir))
+  createDirectories(outDir)
+
+  # Create Assay object
+  # NOTE: You should define how the Assay function handles NA counts
+  assay <- Assay(counts)
+
+  # Create RNASeqOBJ object
+  new("RNASeqOBJ",
+    assay = assay,
+    pheno = pheno, dds = NULL, contrast_df = data.frame(), diffres = list(),
+    outDir = outDir
+  )
+}
+```
+
+
+
+
+```{r}
+### get terms list for heatmap annotation
+get_termList <- function(geneCls,
+                         anno_cols,
+                         topN = 10,
+                         fun = "enrichGO",
+                         ont = "BP",
+                         OrgDb = "org.Sjaponicum.eg.db",
+                         keyType = "GENEID",
+                         text_limits = c(8, 12)) {
+  goCls <- clusterProfiler::compareCluster(geneCls,
+    fun = fun, ont = ont,
+    OrgDb = OrgDb, keyType = keyType
+  )
+
+  goCls_simple <- clusterProfiler::simplify(goCls,
+    cutoff = 0.7,
+    by = "p.adjust",
+    select_fun = min,
+    measure = "Wang"
+  )
+
+
+  go_df <- goCls_simple@compareClusterResult %>%
+    as.data.frame() %>%
+    group_by(Cluster) %>%
+    top_n(wt = `p.adjust`, n = -topN)
+
+  go_df$col <- anno_cols[as.character(go_df$Cluster)]
+
+  go_df.tmp <- go_df %>%
+    group_by(Cluster) %>%
+    mutate(size = scales::rescale(-log10(pvalue), to = text_limits)) %>%
+    ungroup() %>%
+    dplyr::select(c("Description", "col", "size"))
+
+  colnames(go_df.tmp) <- c("text", "col", "fontsize")
+
+  term.list <- split(as.data.frame(go_df.tmp), go_df$Cluster)
+  term.list
+}
+
+
+plot_complexHeatmap <- function(RNASeqOBJ,
+                                Diff_res,
+                                topN = 5,
+                                anno_cols = c("Up-regulated" = "#c77cff", "Down-regulated" = "#FF9900"),
+                                annoblock = TRUE, annoGO = TRUE,
+                                GOtopN = 10,
+                                fun = "enrichGO",
+                                ont = "BP",
+                                OrgDb = "org.Sjaponicum.eg.db",
+                                keyType = "GENEID",
+                                text_limits = c(8, 12)) {
+  Diff_res <- RNASeqOBJ@diffres[[Diff_res]]
+
+  upExpression <- RNASeqOBJ@assay@tpm[Diff_res$up_gene$SYMBOL, ]
+  downExpression <- RNASeqOBJ@assay@tpm[Diff_res$down_gene$SYMBOL, ]
+
+  upExpression <- upExpression[order(rowMeans(upExpression), decreasing = TRUE), ]
+  downExpression <- downExpression[order(rowMeans(downExpression), decreasing = TRUE), ]
+
+  subexpression <- rbind(upExpression, downExpression)
+
+  subgroup <- c(rep("Up-regulated", nrow(upExpression)), rep("Down-regulated", nrow(downExpression)))
+  # 生成分组颜色条注释；top annotation
+
+  mat <- as.matrix(as.data.frame(t(scale(t(subexpression)))))
+  class <- anno_block(
+    gp = gpar(
+      fill = c("#c77cff", "#FF9900"),
+      col = "white"
+    ), height = unit(5, "mm"),
+    labels = Diff_res$Group,
+    labels_gp = gpar(col = "white", fontsize = 8, fontface = "bold")
+  )
+
+
+  group <- HeatmapAnnotation(group = class)
+
+  # 添加gene 名称标记; left annotation
+
+  mark <- c(head(Diff_res$up_gene$SYMBOL, topN), head(Diff_res$down_gene$SYMBOL, topN))
+  mark_col <- ifelse(mark %in% Diff_res$up_gene$SYMBOL, "#c77cff", "#FF9900")
+  lab <- rowAnnotation(ano = anno_mark(
+    at = match(mark, rownames(mat)),
+    labels = id2name[mark, "Gene_Name"],
+    which = "row", side = "left",
+    labels_gp = grid::gpar(
+      fontface = "italic",
+      fontsize = 12,
+      col = mark_col
+    )
+  ))
+
+  # 添加上下调Gene anno_block
+
+  align_to <- split(1:nrow(mat), subgroup)
+
+  if (annoblock == TRUE) {
+    anno.block <- ComplexHeatmap::anno_block(
+      align_to = align_to,
+      panel_fun = function(index, subgroup) {
+        grid::grid.rect(gp = grid::gpar(fill = anno_cols[subgroup], col = NA))
+        # text
+        grid::grid.text(
+          label = paste("N:", length(index), sep = ""),
+          rot = 90,
+          gp = grid::gpar(
+            col = "white",
+            fontsize = 12
+          )
+        )
+      }, which = "row"
+    )
+  } else {
+    anno.block <- NULL
+  }
+
+
+  if (annoGO == TRUE) {
+    geneCls <- split(
+      rownames(mat),
+      subgroup
+    )
+
+    term.list <- get_termList(
+      geneCls, anno_cols,
+      GOtopN,
+      fun,
+      ont,
+      OrgDb,
+      keyType,
+      text_limits
+    )
+
+    textbox <- ComplexHeatmap::anno_textbox(align_to,
+      term.list,
+      word_wrap = T,
+      add_new_line = T,
+      side = "right",
+      background_gp = grid::gpar(
+        fill = "grey95",
+        col = "grey50"
+      ),
+      by = "anno_link"
+    )
+  } else {
+    textbox <- NULL
+  }
+
+  if (is.null(anno.block) & is.null(textbox)) {
+    right_annotation <- NULL
+  } else {
+    right_annotation <- rowAnnotation(
+      cluster = anno.block,
+      textbox = textbox
+    )
+  }
+
+  ht <- Heatmap(mat,
+    cluster_rows = FALSE,
+    cluster_columns = TRUE,
+    column_split = 2,
+    column_title = NULL,
+    show_row_names = FALSE,
+    name = "Z-score(TPM)",
+    top_annotation = group,
+    left_annotation = lab,
+    right_annotation = right_annotation,
+    row_split = subgroup
+  )
+  return(list(ht = ht, mat = mat))
+}
+```
+
+# FigS23a
+```{r}
+library(purrr)
+
+phenoList <- split(pheno, pheno$Experiment)
+
+RNA_obj <- RNASeqOBJ(
+  counts = CountData[, phenoList$t1201$Sample],
+  pheno = phenoList$t1201,
+  "../03.tables/RNASeq_lsamp"
+)
+
+RNA_obj <- fill_TPM(RNA_obj,
+  gtf_file = "/home/shycheng/genome/Schitosoma_jp/sjv3_up/annotation/genes.gtf",
+  version = "V3"
+)
+
+RNA_obj <- RNA_obj %>%
+  run_DESeq2(force = TRUE)
+
+RNA_obj <- RNA_obj %>%
+  createContrastDataFrame(control = "gfp") %>%
+  processContrasts(FC_cutoff = log2(1.2), p_cutoff = 0.05)
+
+ht_res <- plot_complexHeatmap(RNA_obj, Diff_res = names(RNA_obj@diffres))
+
+plot_PCA(object = RNA_obj, show = T)
+plot_corHeatmap(object = RNA_obj, cluster_rows = T, cluster_cols = T)
+
+pdf("../02.figures/FigS23a.pdf", width = 9, height = 6)
+ht_res$ht
+dev.off()
+```
+
+
+# FigS23d
+```{r fig.height=5, fig.width=6.4}
+t1201_gsea <- clusterProfiler::gseGO(
+  geneList = RNA_obj@diffres$t1201_lsamp_vs_t1201_gfp$rankGeneList,
+  pvalueCutoff = 0.05, pAdjustMethod = "BH", minGSSize = 10,
+  maxGSSize = 500, ont = "BP", OrgDb = "org.Sjaponicum.eg.db", keyType = "GENEID"
+)
+FigS23d <- gseaplot2(t1201_gsea, geneSetID = 1, title = t1201_gsea$Description[1], pvalue_table = TRUE, color = "red")
+ggsave("../02.figures/FigS23/FigS23d.pdf", width = 6.4, height = 5, plot = FigS23d)
+FigS23d
+```
+
+
+# FigS23e
+```{r fig.height=5, fig.width=6.4}
+t1201_gsea <- clusterProfiler::gseGO(
+  geneList = RNA_obj@diffres$t1201_lsamp_vs_t1201_gfp$rankGeneList,
+  pvalueCutoff = 0.05, pAdjustMethod = "BH", minGSSize = 10,
+  maxGSSize = 500, ont = "BP", OrgDb = "org.Sjaponicum.eg.db", keyType = "GENEID"
+)
+
+FigS23e <- gseaplot2(t1201_gsea, geneSetID = 4, title = t1201_gsea$Description[4], pvalue_table = TRUE, color = "red")
+ggsave("../02.figures/FigS23/FigS23e.pdf", width = 6.4, height = 5, plot = FigS23e)
+FigS23e
+```
+
+
+
+```{r}
+setGeneric("run_RNASeq_pipeline", function(object) standardGeneric("run_RNASeq_pipeline"))
+
+setMethod("run_RNASeq_pipeline", "RNASeqOBJ", function(object) {
+  # 在此方法中，使用lapply来迭代contrast_df中的行并处理每个对照
+
+  run_RNASeq_pipeline <- function(root_dir, diff_res) {
+    prefix <- paste(as.character(diff_res$Group)[1],
+      as.character(diff_res$Group)[2],
+      sep = "_vs_"
+    ) # eg: C24M_vs_C12Mix
+    out_dir <- file.path(root_dir, prefix, "/")
+    if (dir.exists(out_dir) == FALSE) {
+      dir.create(out_dir)
+    }
+    tryCatch(
+      expr = {
+        SJDB::DEtoXlSX(Diff_res = diff_res, Dir = out_dir)
+        SJDB::GSEAtoXlSX(Diff_res = diff_res, Dir = out_dir, version = "V3")
+        SJDB::GOtoXlSX(Diff_res = diff_res, Dir = out_dir, version = "V3")
+        SJDB::Plot_DE_GOTerms(Diff_res = diff_res, DIR = out_dir, version = "V3")
+        SJDB::PlotKEGG(Diff_res = diff_res, Dir = out_dir, save_Plot = T)
+        SJDB::Plot_volcano(Diff_res = diff_res, Dir = out_dir, save_Plot = T)
+        SJDB::Plot_enhancedVolcano(Diff_res = diff_res, Dir = out_dir, save_Plot = T)
+        SJDB::Plot_heatmap(Diff_res = diff_res, dds = dds, Dir = out_dir, save_Plot = T)
+      }, error = function(e) {
+        # 当发生异常时，打印错误信息并返回 NULL
+        cat("Error in run_RNASeq_pipeline for", prefix, ":", e$message, "\n")
+        return(NULL)
+      }, finally = print(paste0("Finish analysis:", prefix, "  Files were save to ", out_dir))
+    )
+  }
+  lapply(object@diffres, run_RNASeq_pipeline, root_dir = object@outDir)
+  invisible(object) # 修改为 invisible，通常情况下不需要打印整个对象
+})
+
+run_RNASeq_pipeline(RNA_obj)
+```
+
+
+
+
+
+
+

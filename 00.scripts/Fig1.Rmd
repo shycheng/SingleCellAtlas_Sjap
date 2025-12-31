@@ -1,0 +1,404 @@
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(RColorBrewer)
+  library(magrittr)
+  library(tidyverse)
+  library(ggplot2)
+  library(ggpubr)
+  library(SJDB)
+  library(patchwork)
+  library(SeuratWrappers)
+  library(clusterProfiler)
+})
+```
+
+
+# 1.data processing
+```{r}
+###########################################################################
+# 1.loading Data ----------------------------------------------------------
+###########################################################################
+source("R/plotFunctions.R")
+
+seob_list <- list()
+samples <- c("14dpi", "18dpi_F", "18dpi_M", "22dpi_F", "22dpi_M", "26dpi_F", "26dpi_M")
+DIR <- "/public/shycheng/"
+
+for (sample in samples) {
+  # loading data
+  scrna_data <- Read10X(
+    data.dir = paste0(DIR, paste0(sample, "-out"), "/outs/filtered_feature_bc_matrix")
+  )
+  # create seurat object
+  seob <- CreateSeuratObject(
+    counts = scrna_data,
+    project = sample,
+    min.cells = 3,
+    min.features = 200
+  )
+
+  # add metadata
+  seob[["sample"]] <- sample
+
+  # save seobs in list
+  seob_list[[sample]] <- seob
+}
+
+seob <- merge(
+  x = seob_list[[1]],
+  y = seob_list[-1],
+  add.cell.ids = names(seob_list)
+)
+
+seob[["percent.mt"]] <- PercentageFeatureSet(
+  seob,
+  pattern = "^ND|^C|^ATP"
+)
+
+seob@meta.data <- seob@meta.data %>%
+  mutate(Type = case_when(
+    sample == "14dpi" ~ "14dpi",
+    grepl("_F", sample) ~ "Female",
+    TRUE ~ "Male"
+  ))
+
+seob@meta.data <- seob@meta.data %>%
+  mutate(Time = case_when(
+    sample == "14dpi" ~ "14dpi",
+    grepl("18dpi", sample) ~ "18dpi",
+    grepl("22dpi", sample) ~ "22dpi",
+    grepl("26dpi", sample) ~ "26dpi"
+  ))
+
+
+
+QC <- VlnPlot(seob,
+  features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+  group.by = "sample",
+  log = T,
+  pt.size = 0
+)
+
+QC <- QC + scale_y_continuous(labels = scales::label_number())
+
+mt_stats <- seob@meta.data %>%
+  dplyr::group_by(sample) %>%
+  dplyr::summarise(pct_below_5 = mean(percent.mt < 10) * 100)
+
+QC <- QC + geom_hline(yintercept = 10, linetype = "dashed", color = "red")
+QC <- QC + geom_text(
+  data = mt_stats,
+  aes(
+    x = sample, y = max(seob$percent.mt) * 0.15,
+    label = paste0(round(pct_below_5, 1), "%")
+  ),
+  inherit.aes = FALSE,
+  color = "black",
+  size = 3
+)
+qc_stats <- seob@meta.data %>%
+  dplyr::group_by(sample) %>%
+  dplyr::summarise(
+    n_cells = n(),
+    median_nFeature_RNA = median(nFeature_RNA),
+    median_nCount_RNA = median(nCount_RNA),
+    pct_cells_mt_below_10 = mean(percent.mt < 10) * 100,
+    pct_cells_mt_below_30 = mean(percent.mt < 30) * 100
+  ) %>%
+  dplyr::mutate(across(where(is.numeric), round, 2))
+p_qc <- QC & xlab("")
+
+ggsave(filename = "~/02.figures/QC.pdf", plot = p_qc, width = 12.5, height = 3.8)
+
+
+# filter cells
+seob <- subset(seob, subset = nFeature_RNA > 500 & percent.mt < 30)
+# split object
+seob_list <- SplitObject(seob, split.by = "sample")
+
+
+###########################################################################
+# 2.prepare Data ----------------------------------------------------------
+###########################################################################
+
+# 1. SCTransform
+for (i in 1:length(seob_list)) {
+  seob_list[[i]] <- SCTransform(
+    seob_list[[i]],
+    variable.features.n = 3000,
+    verbose = FALSE
+  )
+}
+
+
+# 2. Integration
+##
+plan("multiprocess", workers = 8)
+
+features <- SelectIntegrationFeatures(
+  object.list = seob_list,
+  nfeatures = 3000
+)
+## PrepSCTIntegration
+seob_list <- PrepSCTIntegration(
+  object.list = seob_list,
+  anchor.features = features
+)
+## find anchors
+seob.anchors <- FindIntegrationAnchors(
+  object.list = seob_list,
+  normalization.method = "SCT",
+  anchor.features = features
+)
+
+## this command creates an 'integrated' data assay
+to_integrate <- Reduce(intersect, lapply(seob_list, rownames))
+
+seob <- IntegrateData(
+  anchorset = seob.anchors, normalization.method = "SCT",
+  features.to.integrate = to_integrate, verbose = TRUE
+)
+
+
+###########################################################################
+# 3.reduce dim ----------------------------------------------------------
+###########################################################################
+## PCA
+seob <- RunPCA(seob, npcs = 100)
+## t-SNE
+seob <- RunTSNE(seob, dims = 1:100)
+## UMAP
+seob <- RunUMAP(seob, dims = 1:100)
+seob <- FindNeighbors(seob, dims = 1:100)
+seob <- FindClusters(seob, resolution = 2, random.seed = 1)
+
+
+###########################################################################
+# 4.cell annotation ----------------------------------------------------------
+###########################################################################
+seob@meta.data <- seob@meta.data %>%
+  mutate(Cell_Type = case_when(
+    seurat_clusters %in% c(
+      1, 2, 7, 9, 11, 14, 15, 18, 31,
+      33, 57, 59, 73, 74
+    ) ~ "Neoblast",
+    seurat_clusters %in% c(44, 47, 56) ~ "Germline stem cell",
+    seurat_clusters %in% c(0, 22, 71) ~ "Neural stem cells",
+    seurat_clusters %in% c(
+      5, 8, 25, 32, 34, 37, 40,
+      43, 48, 49, 53, 63, 64, 68
+    ) ~ "Neural precursor cell",
+    seurat_clusters %in% c(17, 27, 60) ~ "Nonciliated neuron",
+    seurat_clusters %in% c(
+      23, 36, 37, 42, 45, 52,
+      3, 20, 26, 50, 61, # tppp(Sjc-0008945)
+      54, 63, 64, 67, 68
+    ) ~ "Ciliated neuron",
+    seurat_clusters %in% c(58) ~ "KK7+ Neuron",
+    seurat_clusters %in% c(4, 6, 28, 51, 72) ~ "Parenchyma",
+    seurat_clusters %in% c(13, 19, 30) ~ "Tegument progenitor",
+    seurat_clusters %in% c(24) ~ "Tegument progeny 1",
+    seurat_clusters %in% c(16, 29, 35) ~ "Tegument progeny 2",
+    seurat_clusters %in% c(55) ~ "Syncytial 1",
+    seurat_clusters %in% c(39) ~ "Syncytial 2",
+    seurat_clusters %in% c(10, 12, 21, 38, 65) ~ "Muscle",
+    seurat_clusters %in% c(41) ~ "Flame cells",
+    seurat_clusters %in% c(66) ~ "Gut",
+    seurat_clusters %in% c(62) ~ "Vitellocyte",
+    seurat_clusters %in% c(69) ~ "Mehlis gland",
+    seurat_clusters %in% c(70) ~ "Male gametes",
+    seurat_clusters %in% c(46) ~ "Esophageal gland" #' Unknown', modified 20240422
+  ))
+
+
+seob@meta.data$Cell_Type <- factor(as.character(seob@meta.data$Cell_Type),
+  levels = c(
+    "Neoblast",
+    "Germline stem cell",
+    "Neural stem cells",
+    "Neural precursor cell",
+    "Nonciliated neuron",
+    "Ciliated neuron",
+    "KK7+ Neuron",
+    "Parenchyma",
+    "Tegument progenitor",
+    "Tegument progeny 1",
+    "Tegument progeny 2",
+    "Syncytial 1",
+    "Syncytial 2",
+    "Muscle",
+    "Flame cells",
+    "Gut",
+    "Vitellocyte",
+    "Mehlis gland",
+    "Male gametes",
+    "Esophageal gland",
+    "Unknown"
+  )
+)
+
+# save files
+saveRDS(object = seob, "~/data/seob_dim100_20210524_res2.rds")
+```
+
+
+# 2.Fig1b
+```{r fig.height=7, fig.width=12}
+library(ggpubr)
+library(RColorBrewer)
+
+Idents(seob) <- seob@meta.data$Cell_Type
+umapplot_seob <- DimPlot(seob,
+  reduction = "umap",
+  group.by = "Cell_Type",
+  label.size = 4, repel = T,
+  label = T, raster = F
+) + NoAxes() + theme(text = element_text(size = 18)) +
+  scale_color_manual(values = c(
+    "#7FC97F", "#BEAED4", brewer.pal(4, "Oranges"), "#D95F02", "#7570B3",
+    brewer.pal(5, "Blues"), "#E7298A", "#1F78B4", "#B2DF8A",
+    "#33A02C", "#FB9A99", "#E31A1C", "#FFFF99", "grey"
+  ))
+
+col_pal <- c(
+  "#7FC97F", "#BEAED4", "#FEEDDE", "#FDBE85", "#FD8D3C", "#D94701",
+  "#D95F02", "#7570B3", "#EFF3FF", "#BDD7E7", "#6BAED6", "#3182BD",
+  "#08519C", "#E7298A", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99",
+  "#E31A1C", "#FFFF99", "grey"
+)
+
+names(col_pal) <- levels(seob@meta.data$Cell_Type)
+
+ggsave(
+  filename = "../02.figures/Fig1/Fig1B.pdf",
+  width = 12, height = 7, plot = umapplot_seob
+)
+
+umapplot_seob
+```
+
+
+
+# 3.Fig1c 
+
+```{r fig.height=4, fig.width=6}
+barplot_per <- function(seob, colValues = brewer.pal(7, "RdBu"), Cell_Type = "Cell_Type",
+                        levels = c(
+                          "26dpi_F", "22dpi_F", "18dpi_F", "14dpi",
+                          "18dpi_M", "22dpi_M", "26dpi_M"
+                        )) {
+  df <- data.frame(cluster = seob@meta.data[[Cell_Type]], day = seob@meta.data[["orig.ident"]], seob@reductions$umap@cell.embeddings, Cell_type = seob@meta.data[[Cell_Type]])
+
+  bar_plot <- function(df, position = "stack") {
+    df_bar <- with(df, table(cluster, day))
+    df_bar <- as.data.frame(prop.table(df_bar, 1) * 100) # %>%
+    df_bar$day <- factor(df_bar$day, levels = levels)
+
+    p <- ggplot(df_bar, aes(fill = day, y = Freq, x = cluster))
+    p <- p + geom_bar(stat = "identity", position = position, width = 0.8) + labs(fill = "Day")
+    p <- p + theme(panel.background = element_blank()) + scale_fill_manual(values = colValues) +
+      xlab("Clusters") +
+      ylab("Percentage(%)") +
+      ggtitle("Composition(%) of Clusters by Time") +
+      theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = .5))
+    return(p)
+  }
+  bar_plot(df)
+}
+
+Fig1c <- barplot_per(seob, colValues = c(
+  "#B2182B", "#EF8A62", "#FDDBC7", "yellow", "#D1E5F0", "#67A9CF", "#2166AC"
+)) + xlab("")
+
+Fig1c
+
+ggsave("../02.figures/Fig1c.pdf", width = 6, height = 4, plot = Fig1c)
+Fig1c
+```
+
+
+
+
+# 6.Fig3g
+
+```{r fig.height=3.2, fig.width=6.4, message=FALSE}
+scaleData_geneTPM_adult <- readRDS("../scaleData_geneTPM_adult.rds")
+
+pdf("../02.figures/Fig3g.pdf", width = 9.6, height = 3.2)
+plot_expression_change(scaleData_geneTPM_adult_v3, "Sjc_0000373", pheno) +
+  plot_expression_change(scaleData_geneTPM_adult_v3, "Sjc_0000814", pheno) +
+  plot_expression_change(scaleData_geneTPM_adult_v3, "Sjc_0006755", pheno)
+dev.off()
+```
+
+
+
+# export
+```{r}
+# 16517+ 17970+16360+15286+13842+14538+15691
+DefaultAssay(seob) <- "RNA"
+
+library(Seurat)
+library(Matrix)
+library(data.table)
+library(dplyr)
+
+export_seuratObj <- function(seob, outdir, assay = "RNA", slot = "data") {
+  # 1. Create directory safely
+  if (!dir.exists(outdir)) {
+    dir.create(outdir, recursive = TRUE)
+  }
+
+  # 2. Export Matrix (Standard Sparse Format)
+  # This saves space and is compatible with other tools (Scanpy, etc.)
+  mtx_int <- GetAssayData(seob, assay = assay, slot = slot)
+  Matrix::writeMM(obj = mtx_int, file = file.path(outdir, "counts.mtx"))
+
+  # 3. Export Barcodes (Column names)
+  # fwrite needs a data.frame/data.table
+  data.table::fwrite(data.frame(barcode = colnames(seob)),
+    file = file.path(outdir, "barcodes.tsv"),
+    col.names = FALSE
+  )
+
+  # 4. Export Genes (Row names) - CRITICAL STEP
+  data.table::fwrite(data.frame(gene = rownames(seob[[assay]])),
+    file = file.path(outdir, "genes.tsv"),
+    col.names = FALSE
+  )
+
+  # 5. Export Metadata (Safely)
+  cols_to_keep <- c(
+    "sample", "nCount_RNA", "nFeature_RNA", "percent.mt",
+    "seurat_clusters", "Cell_Type"
+  )
+  # Only select columns that actually exist
+  available_cols <- intersect(cols_to_keep, colnames(seob@meta.data))
+  metadata_int <- seob@meta.data[, available_cols, drop = FALSE]
+  data.table::fwrite(metadata_int,
+    file = file.path(outdir, "metadata.csv"),
+    row.names = TRUE
+  )
+
+  # 6. Export UMAP (Safely)
+  if ("umap" %in% Reductions(seob)) {
+    umap_int <- Embeddings(seob, reduction = "umap")
+    data.table::fwrite(as.data.frame(umap_int),
+      file = file.path(outdir, "umap.csv"),
+      row.names = TRUE
+    )
+  } else {
+    warning("UMAP reduction not found in the Seurat object.")
+  }
+
+  message("Export complete to: ", outdir)
+}
+
+export_seuratObj(seob = seob, outdir = "../01.rds_files/scRNA_atlas_Sjap")
+```
+
+
+
+
+

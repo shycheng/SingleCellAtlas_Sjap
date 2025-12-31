@@ -1,43 +1,70 @@
 # SingleCellAtlas_Sjap
 
-Code for "Dynamic single-cell transcriptomics reveals lsamp-guided neural network formation in male S. japonicum driving female reproduction".
+Code for the paper: **"Dynamic single-cell transcriptomics reveals lsamp-guided neural network formation in male *S. japonicum* driving female reproduction"**
 
-Codes in Rmd or Jupyter Notebook format can be used to replicate figures and analysis results in the paper.
-
-Utility functions are available in the `./SingleCellAtlas_Sjap/R` directory.
+R Markdown and Jupyter Notebook files can be used to replicate figures and analysis results in the paper.
 
 ## Project Structure
 
-### Rmd files:
+```
+SingleCellAtlas_Sjap/
+├── 00.scripts/
+│   ├── *.Rmd                  # R Markdown figure scripts
+│   ├── R/                     # Utility R functions
+│   └── jupyter/               # Python notebooks
+└── README.md
+```
 
-- `Fig1_S1-S5.Rmd`
-- `Fig2_S6-S9.Rmd`
-- `Fig3_S10-S13.Rmd`
+### R Markdown Files (`00.scripts/`)
 
-These R Markdown files reproduce the main and supplementary figures in the paper.
+| File | Description |
+|------|-------------|
+| `Fig1.Rmd` | Figure 1 - Main atlas visualization |
+| `Fig2.Rmd` | Figure 2 - Analysis and comparisons |
+| `Fig3.Rmd` | Figure 3 - Additional analysis |
+| `FigS1-S6.Rmd` | Supplementary Figures S1-S6 |
+| `FigS7_S9_S11.Rmd` | Supplementary Figures S7, S9, S11 |
+| `FigS11-S15.Rmd` | Supplementary Figures S11-S15 |
+| `FigS23.Rmd` | Supplementary Figure S23 |
 
-### Jupyter Notebooks (`SingleCellAtlas_Sjap/jupyter/`):
+### Jupyter Notebooks (`00.scripts/jupyter/`)
 
-- `Fig2B.ipynb`
-- `FigS10CDE-S11CDE.ipynb`
+| File | Description |
+|------|-------------|
+| `Fig2b.ipynb` | Figure 2B generation |
+| `FigS12-S13.ipynb` | Supplementary Figures S12-S13 |
 
-These notebooks provide additional figure generation and analysis.
+### Utility R Scripts (`00.scripts/R/`)
 
-### Utility R Scripts (`SingleCellAtlas_Sjap/R/`):
-
-- `plotFunctions.R`: Contains plotting utility functions.
-- `Velocity.R`: Contains functions related to RNA velocity analysis.
+| Script | Description |
+|--------|-------------|
+| `plotFunctions.R` | General plotting utilities (violin plots, bar plots, UMAP) |
+| `plotSlingshot.R` | Trajectory analysis visualization with Slingshot |
+| `plot_umap.R` | UMAP plotting functions |
+| `Velocity.R` | RNA velocity analysis functions for scVelo integration |
+| `runMiloDE.R` | Differential expression analysis with Milo |
+| `visPseudotimeHeatmap.R` | Pseudotime heatmap visualization |
 
 ## Usage
 
-1.  Clone this repository.
-2.  Open the relevant `.Rmd` files in RStudio or the `.ipynb` notebooks in JupyterLab.
-3.  Run the code to reproduce the figures and analyses as described in the paper.
+1. Clone this repository
+2. Open relevant `.Rmd` files in RStudio or `.ipynb` notebooks in JupyterLab
+3. Run code cells to reproduce figures and analyses
 
 ## Requirements
 
-- R and RStudio (for `.Rmd` files)
-- Python and Jupyter Notebook (for `.ipynb` files)
+### R
+- Seurat
+- tidyverse
+- ggplot2, ggpubr, patchwork
+- RColorBrewer, ggsci
+- slingshot, tradeSeq
+- clusterProfiler
+
+### Python
+- scanpy
+- scvelo
+- matplotlib
 
 ## Contact
 

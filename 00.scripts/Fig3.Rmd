@@ -1,0 +1,128 @@
+# Loading data
+```{r }
+library(dplyr)
+
+Neuron.combined <- readRDS(file = "~/Projects/scRNA-seq/data/Neuron_seob.rds")
+
+Male_seob_neuron <- readRDS("~/Male_seob_neuron.rds")
+Female_seob_neuron <- readRDS("~/Female_seob_neuron.rds")
+
+
+Neuron.combined@meta.data <- Neuron.combined@meta.data %>%
+  mutate(Cell_Type = case_when(
+    seurat_clusters %in% c(0, 1, 8, 23, 25) ~ "Neuronal Progenitor",
+    seurat_clusters %in% c(3, 12) ~ "NPC-like",
+
+    # Neural Lineage 1 (Formerly Alpha)
+    seurat_clusters %in% c(16, 22, 27, 28, 38) ~ "N1.p",
+    seurat_clusters %in% c(9) ~ "N1.1 Neuron",
+    seurat_clusters %in% c(31, 32, 40, 34, 36, 18, 35, 39, 26) ~ "N1.2 Neuron",
+
+    # Neural Lineage 2 (Formerly Beta)
+    seurat_clusters %in% c(10) ~ "N2.p",
+    seurat_clusters %in% c(14) ~ "N2.1 Neuron",
+    seurat_clusters %in% c(33) ~ "N2.2 Neuron",
+
+    # Neural Lineage 3 (Formerly Gamma)
+    seurat_clusters %in% c(7, 30) ~ "N3.p",
+    seurat_clusters %in% c(5) ~ "N3.1 Neuron",
+    seurat_clusters %in% c(37) ~ "N3.2 Neuron",
+
+    # Neural Lineage 4 (Formerly Delta)
+    seurat_clusters %in% c(2, 19) ~ "N4.p1",
+    seurat_clusters %in% c(15, 11) ~ "N4.p2",
+    seurat_clusters %in% c(41, 20, 24) ~ "N4.p3",
+    seurat_clusters %in% c(6) ~ "N4.1 Neuron",
+    seurat_clusters %in% c(4) ~ "N4.2 Neuron",
+    seurat_clusters %in% c(21) ~ "N4.3 Neuron",
+    seurat_clusters %in% c(13, 17) ~ "N4.4 Neuron",
+
+    # Neural Lineage 5 (Formerly Epsilon)
+    seurat_clusters %in% c(29) ~ "N5 Neuron",
+
+    # 默认情况
+    TRUE ~ "Unassigned"
+  ))
+
+Neuron.combined@meta.data$Cell_Type <- factor(
+  as.character(Neuron.combined@meta.data$Cell_Type),
+  levels = c(
+    "Neuronal Progenitor",
+    "NPC-like",
+    "N1.p",
+    "N2.p",
+    "N3.p",
+    "N4.p1",
+    "N4.p2",
+    "N4.p3",
+    "N1.1 Neuron",
+    "N1.2 Neuron",
+    "N2.1 Neuron",
+    "N2.2 Neuron",
+    "N3.1 Neuron",
+    "N3.2 Neuron",
+    "N4.1 Neuron",
+    "N4.2 Neuron",
+    "N4.3 Neuron",
+    "N4.4 Neuron",
+    "N5 Neuron"
+  )
+)
+# Nx.p Nx lineage progenitor
+# N4.p1, N4.p2, N4.p3 N4 linegae progenitor state 1/2/3
+```
+
+
+# Supplementary data S16
+```{r}
+job::job(
+  {
+    library(Seurat)
+    Idents(Neuron.combined) <- Neuron.combined@meta.data$Cell_Type
+    DefaultAssay(Neuron.combined) <- "RNA"
+    neu_cellmarker <- FindAllMarkers(Neuron.combined, only.pos = T, logfc.threshold = 0.1)
+    saveRDS(neu_cellmarker, "~/01.rds_files/neuron_combined_cellmarker.rds")
+  },
+  import = list(Neuron.combined)
+)
+```
+
+
+```{r}
+neu_cellmarker <- readRDS("~/01.rds_files/neuron_combined_cellmarker.rds")
+
+neuron_markers_top50 <- neu_cellmarker %>%
+  mutate(GeneName = ID2NAME[gene, "new_gene_name"]) %>%
+  group_by(cluster) %>%
+  top_n(n = -50, wt = p_val_adj)
+writexl::write_xlsx(neuron_markers_top50, "../02.figures/neuron_markers_top50.xlsx")
+neuron_markers_top50
+```
+
+
+
+# Fig3a
+```{r fig.height=6*0.85, fig.width=12.8*0.85}
+Idents(Neuron.combined) <- Neuron.combined$Cell_Type
+DimPlot(Neuron.combined)
+
+
+Fig3a <- create_numbered_umap(Neuron.combined,
+  split_by = "Sex", col_vectors = col_vectors[1:length(unique(Neuron.combined@meta.data$Cell_Type))],
+  # highlight_clusters = c(14,17,12),
+  outline_color = "black", outline_size = 0.5
+)
+
+ggsave("../02.figures/Fig3a.pdf", width = 12.8, height = 6, plot = Fig3a)
+```
+
+
+# Fig3e
+```{r fig.height=4, fig.width=12}
+DefaultAssay(Neuron.combined) <- "RNA"
+Fig3e <- multi_simFP(ids = c("Sjc-0000814", "Sjc-0006754", "Sjc-0000373"), Neuron.combined, min.cutoff = "q1", max.cutoff = "q99")
+
+ggsave(filename = "../02.figures/Fig3e.pdf", width = 12, height = 4, plot = Fig3e)
+Fig3e
+```
+

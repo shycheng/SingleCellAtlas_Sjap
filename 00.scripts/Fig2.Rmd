@@ -1,0 +1,598 @@
+# data loading
+```{r}
+library(Seurat)
+
+# Load data
+Female_seob <- readRDS(file = "~/0.data/Female_seob_CellType.rds")
+Male_seob <- readRDS(file = "~/0.data/Male_seob_CellType.rds")
+
+# Subsetting GSCs
+Male_GSCs.cells <- colnames(subset(Neoblast.combined, subset = Sex == "Male" & Cell_Type %in% c("GSCs", "GSC progeny", "Male gametophyte")))
+Female_GSCs.cells <- colnames(subset(Neoblast.combined, subset = Sex == "Female" & Cell_Type %in% c("GSCs", "GSC progeny", "Female gametophyte")))
+
+
+# Data pre-processing (Male GSCs)
+Male_GSCs <- Male_seob[, Male_GSCs.cells]
+Male_GSCs <- Male_GSCs %>%
+  RunPCA(npcs = 30) %>%
+  RunUMAP(dims = 1:30) %>%
+  FindNeighbors(dims = 1:30) %>%
+  FindClusters(resolution = 0.3, random.seed = 1)
+Male_GSCs@meta.data$Cell_Type <- Neoblast.combined@meta.data[colnames(Male_GSCs), "Cell_Type"]
+
+# Data pre-processing (Female GSCs)
+Female_GSCs <- Female_seob[, Female_GSCs.cells]
+Female_GSCs <- Female_GSCs %>%
+  RunPCA(npcs = 20) %>%
+  RunUMAP(dims = 1:20) %>%
+  FindNeighbors(dims = 1:20) %>%
+  FindClusters(resolution = 0.3, random.seed = 1)
+Female_GSCs@meta.data$Cell_Type <- Neoblast.combined@meta.data[colnames(Female_GSCs), "Cell_Type"]
+```
+
+
+# trajectory analysis using Slingshot
+```{r}
+library(gam)
+library(slingshot)
+library(SingleCellExperiment)
+library(scater)
+library(ggpubr)
+```
+
+
+# umap
+```{r fig.height=4, fig.width=7}
+p_u1 <- DimPlot(Female_GSCs, group.by = "Cell_Type", repel = T, label = T) +
+  scale_color_manual(values = col_vectors[c(9, 10, 11)]) +
+  ggtitle("UMAP of GSCs(female)") +
+  theme_pubr(border = T, base_size = 8) +
+  NoLegend() + theme(
+    plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+    axis.title = element_blank(), axis.ticks = element_blank(), axis.text = element_blank()
+  ) + rotate()
+
+p_u2 <- DimPlot(Male_GSCs, group.by = "Cell_Type", repel = T, label = T) +
+  scale_color_manual(values = col_vectors[c(9, 10, 12)]) +
+  ggtitle("UMAP of GSCs(male)") +
+  theme_pubr(border = T, base_size = 8) +
+  NoLegend() + theme(
+    plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+    axis.title = element_blank(), axis.ticks = element_blank(), axis.text = element_blank()
+  )
+```
+
+```{r}
+sce_male_GSCs <- as.SingleCellExperiment(Male_GSCs, assay = "RNA")
+
+sce_male_GSCs <- slingshot(
+  sce_male_GSCs,
+  reducedDim = "UMAP",
+  clusterLabels = "Cell_Type",
+  start.clus = "GSCs", thresh = 0.05
+)
+
+
+
+sce_female_GSCs <- as.SingleCellExperiment(Female_GSCs, assay = "RNA")
+sce_female_GSCs <- slingshot(
+  sce_female_GSCs,
+  reducedDim = "UMAP",
+  clusterLabels = "Cell_Type",
+  start.clus = "GSCs", thresh = 0.05
+)
+```
+
+# trajectory
+```{r}
+p_j1 <- plot_slingshot(SlingshotDataSet(sce_female_GSCs), show_arrow = T) + theme_pubr(legend = "right", border = T) + ggtitle("Female") + rotate()
+slingLineages(sce_female_GSCs)
+```
+
+
+```{r}
+p_j2 <- plot_slingshot(SlingshotDataSet(sce_male_GSCs), show_arrow = T) + theme_pubr(legend = "right", border = T) + ggtitle("Male")
+slingLineages(sce_male_GSCs)
+```
+
+# Fig2c/2d
+```{r fig.height=3, fig.width=12}
+p <- patchwork::wrap_plots(p_u1, p_j1, p_u2, p_j2, ncol = 4)
+ggsave("../02.figures/Fig2C_2D.pdf", width = 12, height = 3, plot = p)
+```
+
+# tradeSeq
+```{r}
+sce <- sce_male_GSCs
+counts <- GetAssayData(object = Male_GSCs, assay = "RNA", slot = "counts")
+crv <- SlingshotDataSet(sce)
+set.seed(5)
+icMat <- evaluateK(
+  counts = counts, sds = crv, k = 3:10,
+  nGenes = 300, verbose = T, plot = TRUE
+)
+```
+
+
+```{r}
+sce <- sce_female_GSCs
+counts <- GetAssayData(object = Female_GSCs, assay = "RNA", slot = "counts")
+crv <- SlingshotDataSet(sce)
+set.seed(5)
+icMat <- evaluateK(
+  counts = counts, sds = crv, k = 3:10,
+  nGenes = 300, verbose = T, plot = TRUE
+)
+```
+
+
+```{r}
+counts.f <- GetAssayData(object = Female_GSCs, assay = "RNA", slot = "counts")
+counts.m <- GetAssayData(object = Male_GSCs, assay = "RNA", slot = "counts")
+
+job::job(
+  {
+    library(slingshot)
+    library(tradeSeq)
+    set.seed(6)
+    crv <- SlingshotDataSet(sce_female_GSCs)
+    sce_tradeseq.f <- fitGAM(counts = counts.f, sds = crv, nknots = 7, verbose = FALSE)
+    saveRDS(sce_tradeseq.f, "~/01.rds_files/sce_tradeseq_f.rds")
+  },
+  import = list(counts.f, sce_female_GSCs)
+)
+
+
+job::job(
+  {
+    library(slingshot)
+    library(tradeSeq)
+    set.seed(6)
+    crv <- SlingshotDataSet(sce_male_GSCs)
+    sce_tradeseq.m <- fitGAM(counts = counts.m, sds = crv, nknots = 7, verbose = FALSE)
+    saveRDS(sce_tradeseq.m, "~/01.rds_files/sce_tradeseq_m.rds")
+  },
+  import = list(counts.m, sce_male_GSCs)
+)
+```
+
+
+```{r}
+table(rowData(sce_tradeseq.m)$tradeSeq$converged)
+```
+
+
+# tradeSeq associationTest
+```{r}
+assoRes.m <- associationTest(sce_tradeseq.m)
+head(assoRes.m)
+assoRes.m.sig <- assoRes.m %>% dplyr::filter(pvalue < 1e-10)
+```
+
+```{r}
+marker_genes.m <- assoRes.m.sig %>%
+  dplyr::filter(rownames(.) %in% (cellmarkers.gsc.m %>% dplyr::filter((cluster == "germline") & (pct.2 < 0.1) & (avg_log2FC > 1)) %>% pull(gene))) %>%
+  dplyr::mutate(gene_name = ID2NAME[rownames(.), "new_gene_name"])
+```
+
+```{r}
+assoRes.f <- associationTest(sce_tradeseq.f)
+head(assoRes.f)
+assoRes.f.sig <- assoRes.f %>%
+  dplyr::filter(pvalue < 1e-10) %>%
+  dplyr::arrange(desc(waldStat))
+```
+
+```{r}
+marker_genes.f <- assoRes.f.sig %>%
+  dplyr::filter(rownames(.) %in% (cellmarkers.gsc.f %>% dplyr::filter((cluster == "germline") & (pct.2 < 0.1) & (avg_log2FC > 1)) %>% pull(gene))) %>%
+  dplyr::mutate(gene_name = ID2NAME[rownames(.), "new_gene_name"])
+```
+
+
+# Fig2e/2f/2g
+```{r fig.height=4, fig.width=12}
+colData(sce_tradeseq.f)$Cell_Type <- sce_female_GSCs$Cell_Type
+fig2e <- plotSmoothers_multiGenes_enhanced(
+  models = sce_tradeseq.f,
+  counts = counts.f,
+  genes = c("Sjc-0008219", "Sjc-0007561", "Sjc-0004774", "Sjc-0003040"),
+  same_plot = TRUE, size = 1,
+  lwd = 1.5,
+  lineage = 1, celltype_colors = col_vectors[c(9, 10, 11)],
+  color_by_celltype = TRUE,
+  celltype_column = "Cell_Type", # 请根据您的实际列名调整
+  sample = 0.8,
+  point_alpha = 0.7
+)
+colData(sce_tradeseq.m)$Cell_Type <- sce_male_GSCs$Cell_Type
+
+fig2f <- plotSmoothers_multiGenes_enhanced(
+  models = sce_tradeseq.m,
+  counts = counts.m,
+  genes = c("Sjc-0008219", "Sjc-0007561", "Sjc-0004774", "Sjc-0000843"), # c("Sjc-0009220","Sjc-0006622","Sjc-0001604","Sjc-0009231"),
+  same_plot = TRUE, size = 1,
+  lwd = 1.5,
+  lineage = 1, celltype_colors = col_vectors[c(9, 10, 12)],
+  color_by_celltype = TRUE,
+  celltype_column = "Cell_Type", # 请根据您的实际列名调整
+  sample = 0.8,
+  point_alpha = 0.7
+)
+
+fig2g <- plotSmoothers_multiGenes_enhanced(
+  models = sce_tradeseq.m,
+  counts = counts.m,
+  genes = c("Sjc-0009220", "Sjc-0006622", "Sjc-0001604", "Sjc-0009231"),
+  same_plot = TRUE, size = 0.5,
+  lwd = 1.5,
+  lineage = 1, celltype_colors = col_vectors[c(9, 10, 12)],
+  color_by_celltype = TRUE,
+  celltype_column = "Cell_Type", # 请根据您的实际列名调整
+  sample = 0.8,
+  point_alpha = 0.5
+)
+```
+
+
+# Clustering analysis
+
+## 1) determine the number of clusters
+```{r}
+mat.f <- getGroupMat(sce_female_GSCs, counts.f, select_genes = rownames(assoRes.f.sig))
+getClusters(obj = as.data.frame(na.omit(smoothMatrix(mat.f))))
+```
+
+```{r}
+mat.m <- getGroupMat(sce_male_GSCs, counts.m, select_genes = rownames(assoRes.m.sig))
+getClusters(obj = as.data.frame(na.omit(smoothMatrix(mat.m))))
+```
+
+## 2) clustering
+```{r}
+set.seed(123)
+mat.f <- as.data.frame(na.omit(smoothMatrix(mat.f)))
+rownames(mat.f) <- revID(rownames(mat.f))
+ck.f <- clusterData(
+  obj = mat.f,
+  scaleData = F,
+  cluster.method = "kmeans",
+  cluster.num = 6
+)
+```
+
+```{r}
+# set.seed(123)
+mat.m <- as.data.frame(na.omit(smoothMatrix(mat.m)))
+rownames(mat.m) <- revID(rownames(mat.m))
+ck.m <- clusterData(
+  obj = mat.m,
+  scaleData = F,
+  cluster.method = "kmeans",
+  cluster.num = 6
+)
+```
+
+## 3) order clusters by pseudotime
+```{r}
+order_pt_cluster <- function(ck) {
+  cluster_profiles <- ck$wide.res %>%
+    group_by(cluster) %>%
+    summarise(across(-gene, mean, na.rm = TRUE))
+
+  ptime <- 1:(ncol(cluster_profiles) - 1)
+
+  cluster_order <- cluster_profiles %>%
+    rowwise() %>%
+    mutate(mean_pseudotime = weighted.mean(ptime, c_across(-cluster))) %>%
+    ungroup() %>%
+    arrange(mean_pseudotime) %>%
+    mutate(new_cluster = row_number())
+  return(rev(cluster_order$cluster))
+}
+```
+
+
+## 4) GO enrichment analysis
+```{r}
+# GO enrichment analysis
+GO_list.f <- lapply(ck.f$cluster.list, function(x) {
+  go <- clusterProfiler::enrichGO(
+    gene = x, OrgDb = "org.Sjaponicum.eg.db",
+    keyType = "GENEID", ont = "BP", pvalueCutoff = 1,
+    pAdjustMethod = "BH", qvalueCutoff = 1,
+    minGSSize = 10, maxGSSize = 500, readable = FALSE
+  )
+  return(revigo(go))
+})
+
+
+GO_list.m <- lapply(ck.m$cluster.list, function(x) {
+  go <- clusterProfiler::enrichGO(
+    gene = x, OrgDb = "org.Sjaponicum.eg.db",
+    keyType = "GENEID", ont = "BP", pvalueCutoff = 1,
+    pAdjustMethod = "BH", qvalueCutoff = 1,
+    minGSSize = 10, maxGSSize = 500, readable = FALSE
+  )
+  return(revigo(go))
+})
+
+
+# generate term annotation
+df.f <- imap_dfr(GO_list.f, ~ mutate(.x, cluster = .y))
+termanno.f <- df.f %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::top_n(wt = pvalue, n = -4) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(cluster, Description, pvalue) %>%
+  dplyr::rename(id = cluster, term = Description)
+termanno.f$pvalue[termanno.f$pvalue < 1e-10] <- 1e-10
+
+df.m <- imap_dfr(GO_list.m, ~ mutate(.x, cluster = .y))
+termanno.m <- df.m %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::slice_min(order_by = pvalue, n = 4) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(cluster, Description, pvalue) %>%
+  dplyr::rename(id = cluster, term = Description)
+termanno.m$pvalue[termanno.m$pvalue < 1e-10] <- 1e-10
+```
+
+# FigS8a
+```{r fig.height=5, fig.width=12}
+sce <- sce_male_GSCs
+bin_celltypes <- getBinCellTypes_fixed(sce, Pseudotime = "slingPseudotime_1", celltype_col = "Cell_Type")
+
+
+cell_type_colors <- col_vectors[c(9, 10, 12)]
+names(cell_type_colors) <- c("GSCs", "GSC progeny", "Male gametophyte")
+
+ptime <- seq(0, 1, length.out = 100)
+
+topha <- HeatmapAnnotation(
+  Pseudotime = ptime,
+  CellType = bin_celltypes,
+  col = list(
+    Pseudotime = colorRamp2(seq(0, 1, 1 / (length(cList$`Blue-Yellow-Red`) - 1)), cList$`Blue-Yellow-Red`),
+    CellType = cell_type_colors
+  )
+)
+
+pdf("../02.figures/FigS8a.pdf", width = 12, height = 5)
+visCluster(
+  object = ck.m,
+  plot.type = "both",
+  HeatmapAnnotation = topha,
+  annoTerm.data = termanno.m,
+  cluster.order = c(6, 1, 4, 2, 5, 3),
+  go.col = rep(ggsci::pal_d3()(6), each = 4),
+  go.size = "pval",
+  # markGenes = revID(rownames(marker_genes.m)),
+  term.text.limit = c(9, 12),
+  add.sampleanno = T
+)
+dev.off()
+```
+
+# FigS8b
+```{r fig.height=5, fig.width=12}
+sce <- sce_female_GSCs
+bin_celltypes <- getBinCellTypes_fixed(sce, Pseudotime = "slingPseudotime_1", celltype_col = "Cell_Type")
+
+
+cell_type_colors <- col_vectors[c(9, 10, 11)]
+names(cell_type_colors) <- c("GSCs", "GSC progeny", "Female gametophyte")
+
+
+ptime <- seq(0, 1, length.out = 100)
+
+topha <- HeatmapAnnotation(
+  Pseudotime = ptime,
+  CellType = bin_celltypes,
+  col = list(
+    Pseudotime = colorRamp2(seq(0, 1, 1 / (length(cList$`Blue-Yellow-Red`) - 1)), cList$`Blue-Yellow-Red`),
+    CellType = cell_type_colors
+  )
+)
+
+
+pdf("../02.figures/FigS8b.pdf", width = 12, height = 5)
+visCluster(
+  object = ck.f,
+  plot.type = "both",
+  HeatmapAnnotation = topha,
+  cluster.order = c(4, 1, 5, 3, 2, 6), # rev(c(3,6,2,5,1,4)),
+  annoTerm.data = termanno.f,
+  go.col = rep(ggsci::pal_d3()(6), each = 4),
+  go.size = "pval",
+  term.text.limit = c(8, 11),
+  add.sampleanno = T
+)
+dev.off()
+```
+
+
+```{r}
+clust1 <- ck.f$cluster.list
+clust2 <- ck.m$cluster.list
+
+shared_genes <- intersect(unlist(ck.f$cluster.list), unlist(ck.m$cluster.list))
+
+
+f.cls <- sapply(shared_genes, function(id) {
+  # 找到包含该基因的聚类
+  clusters <- names(ck.f$cluster.list)[sapply(ck.f$cluster.list, function(x) id %in% x)]
+  # 返回第一个匹配的聚类，如果没有则返回NA
+  if (length(clusters) > 0) clusters[1] else NA
+})
+
+
+m.cls <- sapply(shared_genes, function(id) {
+  # 找到包含该基因的聚类
+  clusters <- names(ck.m$cluster.list)[sapply(ck.m$cluster.list, function(x) id %in% x)]
+  # 返回第一个匹配的聚类，如果没有则返回NA
+  if (length(clusters) > 0) clusters[1] else NA
+})
+```
+
+
+
+# Supplementary Tables S7/S8/S9
+```{r}
+gene_to_cluster.f <- stack(ck.f$cluster.list)
+names(gene_to_cluster.f) <- c("gene", "cluster")
+rownames(gene_to_cluster.f) <- gene_to_cluster.f$gene
+
+gene_to_cluster.m <- stack(ck.m$cluster.list)
+names(gene_to_cluster.m) <- c("gene", "cluster")
+rownames(gene_to_cluster.m) <- gene_to_cluster.m$gene
+
+assoRes.f.sig.annotated <- assoRes.f.sig %>%
+  dplyr::mutate(gene_id = revID(rownames(.))) %>%
+  dplyr::left_join(gene_to_cluster.f, by = c("gene_id" = "gene")) %>%
+  dplyr::mutate(gene_name = ID2NAME[revID(gene_id), "new_gene_name"]) %>%
+  dplyr::arrange(cluster, desc(waldStat))
+
+assoRes.m.sig.annotated <- assoRes.m.sig %>%
+  dplyr::mutate(gene_id = revID(rownames(.))) %>%
+  dplyr::left_join(gene_to_cluster.m, by = c("gene_id" = "gene")) %>%
+  dplyr::mutate(gene_name = ID2NAME[revID(gene_id), "new_gene_name"]) %>%
+  dplyr::arrange(cluster, desc(waldStat))
+
+cls_f <- paste0("C", 1:6)
+names(cls_f) <- paste0("C", c(4, 1, 5, 3, 2, 6))
+
+cls_m <- paste0("C", 1:6)
+names(cls_m) <- paste0("C", c(6, 1, 4, 2, 5, 3))
+
+
+assoRes.f.sig.annotated$cluster <- cls_f[as.character(assoRes.f.sig.annotated$cluster)]
+assoRes.m.sig.annotated$cluster <- cls_m[as.character(assoRes.m.sig.annotated$cluster)]
+
+assoRes.f.sig.annotated$Note <- ID2NAME[revID(assoRes.f.sig.annotated$gene_id), ]$Note
+assoRes.m.sig.annotated$Note <- ID2NAME[revID(assoRes.m.sig.annotated$gene_id), ]$Note
+
+
+
+shared_genes_df$`Cluster.female.` <- cls_f[as.character(shared_genes_df$`Cluster.female.`)]
+shared_genes_df$`Cluster.male.` <- cls_m[as.character(shared_genes_df$`Cluster.male.`)]
+shared_genes_df$Note <- ID2NAME[revID(shared_genes_df$shared_genes), ]$Note
+
+df.f$cluster <- cls_f[as.character(df.f$cluster)]
+df.m$cluster <- cls_m[as.character(df.m$cluster)]
+
+
+writexl::write_xlsx(
+  list(
+    sig.dynamic.genes.f = dplyr::arrange(assoRes.f.sig.annotated, cluster),
+    sig.dynamic.genes.m = dplyr::arrange(assoRes.m.sig.annotated, cluster),
+    share.dynamic.genes = shared_genes_df
+  ),
+  "../02.figures/Supplementary_tables.xlsx"
+)
+
+
+# export GO terms
+writexl::write_xlsx(
+  list(`Female germline` = df.f, `Male germline` = df.m),
+  "../02.figures/Supplementary_tables.xlsx"
+)
+```
+
+
+
+
+
+
+
+```{r}
+m1 <- clusterProfiler::enrichGO(
+  gene = intersect(ck.f$cluster.list$C5, ck.m$cluster.list$C4), OrgDb = "org.Sjaponicum.eg.db",
+  keyType = "GENEID", ont = "BP", pvalueCutoff = 0.2,
+  pAdjustMethod = "BH", qvalueCutoff = 1,
+  minGSSize = 10, maxGSSize = 500, readable = FALSE
+)
+m1 <- revigo(m1)
+```
+
+```{r}
+ID2NAME[revID(intersect(ck.f$cluster.list$C5, ck.m$cluster.list$C4)), ]
+```
+
+
+```{r}
+m2_go <- clusterProfiler::enrichGO(
+  gene = intersect(ck.f$cluster.list$C2, ck.m$cluster.list$C5), OrgDb = "org.Sjaponicum.eg.db",
+  keyType = "GENEID", ont = "BP", pvalueCutoff = 1,
+  pAdjustMethod = "BH", qvalueCutoff = 1,
+  minGSSize = 10, maxGSSize = 500, readable = FALSE
+)
+as.data.frame(m2_go) %>% dplyr::filter(pvalue < 0.05)
+
+m2 <- revigo(m2)
+m2
+```
+
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+df <- m2
+# 假设 df 已经是你提供的那个数据框
+df <- df %>%
+  arrange(pvalue) %>% # 按 p 值排序
+  mutate(rank = row_number())
+
+df_box <- df[, c("Description", "pvalue")]
+
+
+tab <- ggtexttable(df_box,
+  rows = NULL,
+  theme = ttheme("blank")
+)
+pdf("../02.figures/NC_revised/GSCs_shared_m2.pdf", width = 7, height = 5)
+tab %>%
+  tbody_add_border() %>%
+  thead_add_border()
+dev.off()
+```
+
+
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+df <- m1
+# 假设 df 已经是你提供的那个数据框
+df <- df %>%
+  arrange(pvalue) %>% # 按 p 值排序
+  mutate(rank = row_number())
+
+df_box <- df[, c("Description", "pvalue")]
+
+
+tab <- ggtexttable(df_box,
+  rows = NULL,
+  theme = ttheme("blank")
+)
+
+pdf("../02.figures/NC_revised/GSCs_shared_m1.pdf", width = 7, height = 5)
+tab %>%
+  tbody_add_border() %>%
+  thead_add_border()
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+
