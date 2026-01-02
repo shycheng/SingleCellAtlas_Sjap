@@ -1,0 +1,54 @@
+# R project files
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj.user/
+
+# R output files
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.tiff
+*.html
+
+# Data files (too large for git)
+*.rds
+*.RDS
+*.rda
+*.RData
+*.h5ad
+*.loom
+*.mtx
+
+# Temporary files
+*~
+*.tmp
+*.bak
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE files
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+*.egg-info/
+.eggs/
+
+# Environment
+.env
+.venv/
+venv/
+
+# Large data directories (customize as needed)
+# data/
+# 01.rds_files/
+# 02.figures/

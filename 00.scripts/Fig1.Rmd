@@ -19,11 +19,13 @@ suppressPackageStartupMessages({
 ###########################################################################
 # 1.loading Data ----------------------------------------------------------
 ###########################################################################
+# Load configuration and utility functions
+source("R/config.R")
 source("R/plotFunctions.R")
 
 seob_list <- list()
-samples <- c("14dpi", "18dpi_F", "18dpi_M", "22dpi_F", "22dpi_M", "26dpi_F", "26dpi_M")
-DIR <- "/public/shycheng/"
+samples <- CONFIG$samples
+DIR <- Sys.getenv("SCATLAS_RAW_DIR", unset = "/public/shycheng/")
 
 for (sample in samples) {
   # loading data
@@ -34,8 +36,8 @@ for (sample in samples) {
   seob <- CreateSeuratObject(
     counts = scrna_data,
     project = sample,
-    min.cells = 3,
-    min.features = 200
+    min.cells = CONFIG$analysis$min_cells,
+    min.features = CONFIG$analysis$min_features
   )
 
   # add metadata
@@ -113,7 +115,7 @@ ggsave(filename = "~/02.figures/QC.pdf", plot = p_qc, width = 12.5, height = 3.8
 
 
 # filter cells
-seob <- subset(seob, subset = nFeature_RNA > 500 & percent.mt < 30)
+seob <- subset(seob, subset = nFeature_RNA > CONFIG$analysis$nfeature_min & percent.mt < CONFIG$analysis$mt_threshold)
 # split object
 seob_list <- SplitObject(seob, split.by = "sample")
 
@@ -126,7 +128,7 @@ seob_list <- SplitObject(seob, split.by = "sample")
 for (i in 1:length(seob_list)) {
   seob_list[[i]] <- SCTransform(
     seob_list[[i]],
-    variable.features.n = 3000,
+    variable.features.n = CONFIG$analysis$variable_features,
     verbose = FALSE
   )
 }
@@ -138,7 +140,7 @@ plan("multiprocess", workers = 8)
 
 features <- SelectIntegrationFeatures(
   object.list = seob_list,
-  nfeatures = 3000
+  nfeatures = CONFIG$analysis$variable_features
 )
 ## PrepSCTIntegration
 seob_list <- PrepSCTIntegration(
@@ -165,13 +167,13 @@ seob <- IntegrateData(
 # 3.reduce dim ----------------------------------------------------------
 ###########################################################################
 ## PCA
-seob <- RunPCA(seob, npcs = 100)
+seob <- RunPCA(seob, npcs = CONFIG$analysis$pca_dims)
 ## t-SNE
-seob <- RunTSNE(seob, dims = 1:100)
+seob <- RunTSNE(seob, dims = 1:CONFIG$analysis$pca_dims)
 ## UMAP
-seob <- RunUMAP(seob, dims = 1:100)
-seob <- FindNeighbors(seob, dims = 1:100)
-seob <- FindClusters(seob, resolution = 2, random.seed = 1)
+seob <- RunUMAP(seob, dims = 1:CONFIG$analysis$pca_dims)
+seob <- FindNeighbors(seob, dims = 1:CONFIG$analysis$pca_dims)
+seob <- FindClusters(seob, resolution = CONFIG$analysis$cluster_resolution, random.seed = 1)
 
 
 ###########################################################################
@@ -213,33 +215,11 @@ seob@meta.data <- seob@meta.data %>%
 
 
 seob@meta.data$Cell_Type <- factor(as.character(seob@meta.data$Cell_Type),
-  levels = c(
-    "Neoblast",
-    "Germline stem cell",
-    "Neural stem cells",
-    "Neural precursor cell",
-    "Nonciliated neuron",
-    "Ciliated neuron",
-    "KK7+ Neuron",
-    "Parenchyma",
-    "Tegument progenitor",
-    "Tegument progeny 1",
-    "Tegument progeny 2",
-    "Syncytial 1",
-    "Syncytial 2",
-    "Muscle",
-    "Flame cells",
-    "Gut",
-    "Vitellocyte",
-    "Mehlis gland",
-    "Male gametes",
-    "Esophageal gland",
-    "Unknown"
-  )
+  levels = CONFIG$cell_type_levels
 )
 
 # save files
-saveRDS(object = seob, "~/data/seob_dim100_20210524_res2.rds")
+saveRDS(object = seob, get_path("seob_dim100_20210524_res2.rds", "rds"))
 ```
 
 
@@ -255,23 +235,14 @@ umapplot_seob <- DimPlot(seob,
   label.size = 4, repel = T,
   label = T, raster = F
 ) + NoAxes() + theme(text = element_text(size = 18)) +
-  scale_color_manual(values = c(
-    "#7FC97F", "#BEAED4", brewer.pal(4, "Oranges"), "#D95F02", "#7570B3",
-    brewer.pal(5, "Blues"), "#E7298A", "#1F78B4", "#B2DF8A",
-    "#33A02C", "#FB9A99", "#E31A1C", "#FFFF99", "grey"
-  ))
+  scale_color_manual(values = CONFIG$colors$cell_types)
 
-col_pal <- c(
-  "#7FC97F", "#BEAED4", "#FEEDDE", "#FDBE85", "#FD8D3C", "#D94701",
-  "#D95F02", "#7570B3", "#EFF3FF", "#BDD7E7", "#6BAED6", "#3182BD",
-  "#08519C", "#E7298A", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99",
-  "#E31A1C", "#FFFF99", "grey"
-)
+col_pal <- CONFIG$colors$cell_types
 
 names(col_pal) <- levels(seob@meta.data$Cell_Type)
 
 ggsave(
-  filename = "../02.figures/Fig1/Fig1B.pdf",
+  filename = get_path("Fig1/Fig1B.pdf", "figure"),
   width = 12, height = 7, plot = umapplot_seob
 )
 
@@ -283,11 +254,8 @@ umapplot_seob
 # 3.Fig1c 
 
 ```{r fig.height=4, fig.width=6}
-barplot_per <- function(seob, colValues = brewer.pal(7, "RdBu"), Cell_Type = "Cell_Type",
-                        levels = c(
-                          "26dpi_F", "22dpi_F", "18dpi_F", "14dpi",
-                          "18dpi_M", "22dpi_M", "26dpi_M"
-                        )) {
+barplot_per <- function(seob, colValues = CONFIG$colors$time_points, Cell_Type = "Cell_Type",
+                        levels = CONFIG$time_levels) {
   df <- data.frame(cluster = seob@meta.data[[Cell_Type]], day = seob@meta.data[["orig.ident"]], seob@reductions$umap@cell.embeddings, Cell_type = seob@meta.data[[Cell_Type]])
 
   bar_plot <- function(df, position = "stack") {
@@ -307,13 +275,11 @@ barplot_per <- function(seob, colValues = brewer.pal(7, "RdBu"), Cell_Type = "Ce
   bar_plot(df)
 }
 
-Fig1c <- barplot_per(seob, colValues = c(
-  "#B2182B", "#EF8A62", "#FDDBC7", "yellow", "#D1E5F0", "#67A9CF", "#2166AC"
-)) + xlab("")
+Fig1c <- barplot_per(seob, colValues = CONFIG$colors$time_points) + xlab("")
 
 Fig1c
 
-ggsave("../02.figures/Fig1c.pdf", width = 6, height = 4, plot = Fig1c)
+ggsave(get_path("Fig1c.pdf", "figure"), width = 6, height = 4, plot = Fig1c)
 Fig1c
 ```
 
@@ -325,7 +291,7 @@ Fig1c
 ```{r fig.height=3.2, fig.width=6.4, message=FALSE}
 scaleData_geneTPM_adult <- readRDS("../scaleData_geneTPM_adult.rds")
 
-pdf("../02.figures/Fig3g.pdf", width = 9.6, height = 3.2)
+pdf(get_path("Fig3g.pdf", "figure"), width = 9.6, height = 3.2)
 plot_expression_change(scaleData_geneTPM_adult_v3, "Sjc_0000373", pheno) +
   plot_expression_change(scaleData_geneTPM_adult_v3, "Sjc_0000814", pheno) +
   plot_expression_change(scaleData_geneTPM_adult_v3, "Sjc_0006755", pheno)
@@ -395,10 +361,13 @@ export_seuratObj <- function(seob, outdir, assay = "RNA", slot = "data") {
   message("Export complete to: ", outdir)
 }
 
-export_seuratObj(seob = seob, outdir = "../01.rds_files/scRNA_atlas_Sjap")
+export_seuratObj(seob = seob, outdir = file.path(CONFIG$rds_dir, "scRNA_atlas_Sjap"))
 ```
 
 
-
+# Session Info
+```{r}
+sessionInfo()
+```
 
 

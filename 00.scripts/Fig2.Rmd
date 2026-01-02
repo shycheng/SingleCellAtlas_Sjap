@@ -2,9 +2,12 @@
 ```{r}
 library(Seurat)
 
+# Load configuration
+source("R/config.R")
+
 # Load data
-Female_seob <- readRDS(file = "~/0.data/Female_seob_CellType.rds")
-Male_seob <- readRDS(file = "~/0.data/Male_seob_CellType.rds")
+Female_seob <- readRDS(file = get_path("Female_seob_CellType.rds", "data"))
+Male_seob <- readRDS(file = get_path("Male_seob_CellType.rds", "data"))
 
 # Subsetting GSCs
 Male_GSCs.cells <- colnames(subset(Neoblast.combined, subset = Sex == "Male" & Cell_Type %in% c("GSCs", "GSC progeny", "Male gametophyte")))
@@ -98,7 +101,7 @@ slingLineages(sce_male_GSCs)
 # Fig2c/2d
 ```{r fig.height=3, fig.width=12}
 p <- patchwork::wrap_plots(p_u1, p_j1, p_u2, p_j2, ncol = 4)
-ggsave("../02.figures/Fig2C_2D.pdf", width = 12, height = 3, plot = p)
+ggsave(get_path("Fig2C_2D.pdf", "figure"), width = 12, height = 3, plot = p)
 ```
 
 # tradeSeq
@@ -137,7 +140,7 @@ job::job(
     set.seed(6)
     crv <- SlingshotDataSet(sce_female_GSCs)
     sce_tradeseq.f <- fitGAM(counts = counts.f, sds = crv, nknots = 7, verbose = FALSE)
-    saveRDS(sce_tradeseq.f, "~/01.rds_files/sce_tradeseq_f.rds")
+    saveRDS(sce_tradeseq.f, get_path("sce_tradeseq_f.rds", "rds"))
   },
   import = list(counts.f, sce_female_GSCs)
 )
@@ -150,7 +153,7 @@ job::job(
     set.seed(6)
     crv <- SlingshotDataSet(sce_male_GSCs)
     sce_tradeseq.m <- fitGAM(counts = counts.m, sds = crv, nknots = 7, verbose = FALSE)
-    saveRDS(sce_tradeseq.m, "~/01.rds_files/sce_tradeseq_m.rds")
+    saveRDS(sce_tradeseq.m, get_path("sce_tradeseq_m.rds", "rds"))
   },
   import = list(counts.m, sce_male_GSCs)
 )
@@ -358,7 +361,7 @@ topha <- HeatmapAnnotation(
   )
 )
 
-pdf("../02.figures/FigS8a.pdf", width = 12, height = 5)
+pdf(get_path("FigS8a.pdf", "figure"), width = 12, height = 5)
 visCluster(
   object = ck.m,
   plot.type = "both",
@@ -396,7 +399,7 @@ topha <- HeatmapAnnotation(
 )
 
 
-pdf("../02.figures/FigS8b.pdf", width = 12, height = 5)
+pdf(get_path("FigS8b.pdf", "figure"), width = 12, height = 5)
 visCluster(
   object = ck.f,
   plot.type = "both",
@@ -488,14 +491,14 @@ writexl::write_xlsx(
     sig.dynamic.genes.m = dplyr::arrange(assoRes.m.sig.annotated, cluster),
     share.dynamic.genes = shared_genes_df
   ),
-  "../02.figures/Supplementary_tables.xlsx"
+  get_path("Supplementary_tables.xlsx", "figure")
 )
 
 
 # export GO terms
 writexl::write_xlsx(
   list(`Female germline` = df.f, `Male germline` = df.m),
-  "../02.figures/Supplementary_tables.xlsx"
+  get_path("Supplementary_tables.xlsx", "figure")
 )
 ```
 
@@ -551,7 +554,7 @@ tab <- ggtexttable(df_box,
   rows = NULL,
   theme = ttheme("blank")
 )
-pdf("../02.figures/NC_revised/GSCs_shared_m2.pdf", width = 7, height = 5)
+pdf(get_path("NC_revised/GSCs_shared_m2.pdf", "figure"), width = 7, height = 5)
 tab %>%
   tbody_add_border() %>%
   thead_add_border()
@@ -578,7 +581,7 @@ tab <- ggtexttable(df_box,
   theme = ttheme("blank")
 )
 
-pdf("../02.figures/NC_revised/GSCs_shared_m1.pdf", width = 7, height = 5)
+pdf(get_path("NC_revised/GSCs_shared_m1.pdf", "figure"), width = 7, height = 5)
 tab %>%
   tbody_add_border() %>%
   thead_add_border()
@@ -586,13 +589,9 @@ dev.off()
 ```
 
 
-
-
-
-
-
-
-
-
+# Session Info
+```{r}
+sessionInfo()
+```
 
 

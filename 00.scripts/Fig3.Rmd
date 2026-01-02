@@ -1,11 +1,13 @@
 # Loading data
 ```{r }
 library(dplyr)
+source("R/config.R")
+source("R/dependencies.R")
 
-Neuron.combined <- readRDS(file = "~/Projects/scRNA-seq/data/Neuron_seob.rds")
+Neuron.combined <- readRDS(file = get_path("Neuron_seob.rds", "data"))
 
-Male_seob_neuron <- readRDS("~/Male_seob_neuron.rds")
-Female_seob_neuron <- readRDS("~/Female_seob_neuron.rds")
+Male_seob_neuron <- readRDS(get_path("Male_seob_neuron.rds", "data"))
+Female_seob_neuron <- readRDS(get_path("Female_seob_neuron.rds", "data"))
 
 
 Neuron.combined@meta.data <- Neuron.combined@meta.data %>%
@@ -81,7 +83,7 @@ job::job(
     Idents(Neuron.combined) <- Neuron.combined@meta.data$Cell_Type
     DefaultAssay(Neuron.combined) <- "RNA"
     neu_cellmarker <- FindAllMarkers(Neuron.combined, only.pos = T, logfc.threshold = 0.1)
-    saveRDS(neu_cellmarker, "~/01.rds_files/neuron_combined_cellmarker.rds")
+    saveRDS(neu_cellmarker, get_path("neuron_combined_cellmarker.rds", "rds"))
   },
   import = list(Neuron.combined)
 )
@@ -89,13 +91,13 @@ job::job(
 
 
 ```{r}
-neu_cellmarker <- readRDS("~/01.rds_files/neuron_combined_cellmarker.rds")
+neu_cellmarker <- readRDS(get_path("neuron_combined_cellmarker.rds", "rds"))
 
 neuron_markers_top50 <- neu_cellmarker %>%
   mutate(GeneName = ID2NAME[gene, "new_gene_name"]) %>%
   group_by(cluster) %>%
   top_n(n = -50, wt = p_val_adj)
-writexl::write_xlsx(neuron_markers_top50, "../02.figures/neuron_markers_top50.xlsx")
+writexl::write_xlsx(neuron_markers_top50, get_path("neuron_markers_top50.xlsx", "figure"))
 neuron_markers_top50
 ```
 
@@ -113,7 +115,7 @@ Fig3a <- create_numbered_umap(Neuron.combined,
   outline_color = "black", outline_size = 0.5
 )
 
-ggsave("../02.figures/Fig3a.pdf", width = 12.8, height = 6, plot = Fig3a)
+ggsave(get_path("Fig3a.pdf", "figure"), width = 12.8, height = 6, plot = Fig3a)
 ```
 
 
@@ -122,7 +124,12 @@ ggsave("../02.figures/Fig3a.pdf", width = 12.8, height = 6, plot = Fig3a)
 DefaultAssay(Neuron.combined) <- "RNA"
 Fig3e <- multi_simFP(ids = c("Sjc-0000814", "Sjc-0006754", "Sjc-0000373"), Neuron.combined, min.cutoff = "q1", max.cutoff = "q99")
 
-ggsave(filename = "../02.figures/Fig3e.pdf", width = 12, height = 4, plot = Fig3e)
+ggsave(filename = get_path("Fig3e.pdf", "figure"), width = 12, height = 4, plot = Fig3e)
 Fig3e
 ```
 
+
+# Session Info
+```{r}
+sessionInfo()
+```
